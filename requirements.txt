@@ -1,0 +1,8 @@
+langchain-mcp-adapters>=0.2,<1
+langchain-openai>=0.3,<2
+langgraph>=0.2,<2
+langgraph-supervisor>=0.0.31,<1
+mcp>=1.27,<2
+pywin32>=306
+python-dotenv>=1.0,<2
+streamlit>=1.32,<2
