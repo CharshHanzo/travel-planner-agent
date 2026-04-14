@@ -4,9 +4,9 @@ from datetime import date
 
 import streamlit as st
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
+from langchain_openai import ChatOpenAI 
 
 
 load_dotenv()
@@ -14,11 +14,11 @@ load_dotenv()
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_MODEL = "qwen-plus-2025-07-28"
-WEATHER_MCP_URL = "http://127.0.0.1:8000/mcp"
+TRAVEL_TOOLS_MCP_URL = "http://127.0.0.1:8000/mcp"
 
 STATUS_FLOW = [
     ("TravelSupervisor", "主管正在分派任务..."),
-    ("WeatherAgent", "WeatherAgent 正在分析天气..."),
+    ("WeatherAgent", "WeatherAgent 正在获取天气信息..."),
     ("ActivityAgent", "ActivityAgent 正在搜索活动..."),
     ("FoodAgent", "FoodAgent 正在推荐餐厅..."),
 ]
@@ -171,9 +171,9 @@ def build_mcp_client():
 
     return MultiServerMCPClient(
         {
-            "weather": {
+            "travel_tools": {   # MCP服务器名字
                 "transport": "http",
-                "url": WEATHER_MCP_URL,
+                "url": TRAVEL_TOOLS_MCP_URL,
             }
         }
     )
@@ -181,6 +181,7 @@ def build_mcp_client():
 
 @st.cache_resource(show_spinner=False)
 def build_travel_graph():
+    # 获取MCP工具
     client = build_mcp_client()
     mcp_tools = run_async(client.get_tools())
 
@@ -188,7 +189,7 @@ def build_travel_graph():
         model=DASHSCOPE_MODEL,
         api_key=DASHSCOPE_API_KEY,
         base_url=DASHSCOPE_BASE_URL,
-        temperature=0.4,
+        temperature=0.5,
     )
 
     weather_agent = create_react_agent(
@@ -336,7 +337,7 @@ elif mcp_import_error:
     )
 
 with st.form("travel_form"):
-    left_col, right_col = st.columns(2)
+    left_col, right_col = st.columns(2)  # 分为两列
 
     with left_col:
         city = st.text_input("城市", value="广州", placeholder="例如：广州")
