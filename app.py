@@ -6,15 +6,15 @@ import streamlit as st
 from dotenv import load_dotenv
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
-from langchain_openai import ChatOpenAI 
-
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import StructuredTool
 
 load_dotenv()
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_MODEL = "qwen-plus-2025-07-28"
-TRAVEL_TOOLS_MCP_URL = "http://127.0.0.1:8000/mcp"
+TRAVEL_TOOLS_MCP_URL = "http://127.0.0.1:8000/sse"
 
 STATUS_FLOW = [
     ("TravelSupervisor", "主管正在分派任务..."),
@@ -24,23 +24,26 @@ STATUS_FLOW = [
 ]
 
 SUPERVISOR_PROMPT = """
-你是出行规划主管。
+    你是出行规划主管。
 
-对于每一个出行规划请求，你必须严格按顺序委派：
-1. 先交给 WeatherAgent 获取天气与出行提醒
-2. 再交给 ActivityAgent 获取活动与行程方向
-3. 最后交给 FoodAgent 获取餐饮建议
+    对于每一个出行规划请求，你必须严格按顺序委派：
+    1. 先交给 WeatherAgent 获取天气与出行提醒
+    2. 再交给 ActivityAgent 获取活动与行程方向
+    3. 最后交给 FoodAgent 获取餐饮建议
 
-不要跳过任何一个 Agent。
-如果某个 Agent 暂时没有完全匹配的工具，就让它基于用户输入、其他 Agent 的上下文和已有工具结果给出简洁建议。
-收集完三个 Agent 的结果后，再由你整合成最终答复。
+    重要提示：
+    - ActivityAgent 可以使用 search_activities 和 plan_route 工具来搜索活动和规划路线
+    - 不要跳过任何一个 Agent
+    - 如果某个 Agent 暂时没有完全匹配的工具，就让它基于用户输入、其他 Agent 的上下文和已有工具结果给出简洁建议
 
-最终答复要求：
-1. 必须使用 Markdown
-2. 使用 `# 最终行程建议` 作为标题
-3. 至少包含“天气与出行提醒”“活动建议”“餐饮建议”“推荐行程”“预算建议”
-4. 内容简洁、可执行，不要暴露中间推理过程
-""".strip()
+    收集完三个 Agent 的结果后，再由你整合成最终答复。
+
+    最终答复要求：
+    1. 必须使用 Markdown
+    2. 使用 `# 最终行程建议` 作为标题
+    3. 至少包含“天气与出行提醒”“活动建议”“餐饮建议”“推荐行程”“预算建议”
+    4. 内容简洁、可执行，不要暴露中间推理过程
+    """.strip()
 
 
 st.set_page_config(
@@ -168,23 +171,63 @@ def detect_active_agent(namespace: tuple[str, ...], data: object) -> str | None:
 @st.cache_resource(show_spinner=False)
 def build_mcp_client():
     from langchain_mcp_adapters.client import MultiServerMCPClient
-
-    return MultiServerMCPClient(
+    
+    # 使用 sync 模式的客户端
+    client = MultiServerMCPClient(
         {
-            "travel_tools": {   # MCP服务器名字
-                "transport": "http",
+            "travel_tools": {
+                "transport": "sse",
                 "url": TRAVEL_TOOLS_MCP_URL,
             }
         }
     )
+    
+    # 同步获取工具
+    tools = client.get_tools()  # 这里应该是同步的
+    
+    return client, tools
 
-
+import inspect 
 @st.cache_resource(show_spinner=False)
 def build_travel_graph():
-    # 获取MCP工具
+    """
+    构建多智能体旅行规划图
+    """
+    import inspect
+    import asyncio
+    from langchain_core.tools import StructuredTool
+    from langchain_mcp_adapters.tools import load_mcp_tools
+    
+    # 获取MCP客户端
     client = build_mcp_client()
-    mcp_tools = run_async(client.get_tools())
+    
+    # 正确获取工具 - 使用 load_mcp_tools
+    try:
+        # 方法1：使用 load_mcp_tools
+        tools = run_async(load_mcp_tools(client))
+        mcp_tools = list(tools) if tools else []
+    except Exception as e:
+        print(f"[ERROR] 加载MCP工具失败: {e}")
+        # 方法2：尝试直接获取
+        try:
+            mcp_tools = run_async(client.get_tools())
+            if isinstance(mcp_tools, tuple):
+                # 如果是元组，取第一个元素
+                mcp_tools = list(mcp_tools[0]) if mcp_tools[0] else []
+            elif not isinstance(mcp_tools, list):
+                mcp_tools = list(mcp_tools) if mcp_tools else []
+        except Exception as e2:
+            print(f"[ERROR] 备用方法也失败: {e2}")
+            mcp_tools = []
 
+    print(f"[INFO] 加载了 {len(mcp_tools)} 个MCP工具")
+    
+    if not mcp_tools:
+        print("[WARNING] 没有加载到任何工具，将使用无工具的Agent")
+        # 创建一个空的工具列表继续运行
+        mcp_tools = []
+
+    # 创建模型
     model = ChatOpenAI(
         model=DASHSCOPE_MODEL,
         api_key=DASHSCOPE_API_KEY,
@@ -192,39 +235,116 @@ def build_travel_graph():
         temperature=0.5,
     )
 
+    def create_sync_wrapper(async_func, name: str, description: str, args_schema=None):
+        """创建同步包装器"""
+        def sync_func(**kwargs):
+            """同步执行异步函数"""
+            try:
+                asyncio.get_running_loop()
+                # 已经有事件循环，在新线程中运行
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, async_func(**kwargs))
+                    return future.result()
+            except RuntimeError:
+                # 没有事件循环，直接运行
+                return asyncio.run(async_func(**kwargs))
+        
+        return StructuredTool.from_function(
+            func=sync_func,
+            name=name,
+            description=description,
+            args_schema=args_schema,
+        )
+    
+    # 包装所有MCP工具为同步工具
+    sync_tools = []
+    for tool in mcp_tools:
+        try:
+            tool_name = getattr(tool, 'name', str(tool))
+            tool_description = getattr(tool, 'description', '')
+            tool_args_schema = getattr(tool, 'args_schema', None)
+            
+            # 获取异步函数
+            async_func = None
+            if hasattr(tool, '_run') and inspect.iscoroutinefunction(tool._run):
+                async_func = tool._run
+            elif hasattr(tool, 'coroutine') and inspect.iscoroutinefunction(tool.coroutine):
+                async_func = tool.coroutine
+            elif callable(tool) and inspect.iscoroutinefunction(tool):
+                async_func = tool
+            
+            if async_func:
+                # 创建同步包装器
+                sync_tool = create_sync_wrapper(
+                    async_func=async_func,
+                    name=tool_name,
+                    description=tool_description,
+                    args_schema=tool_args_schema
+                )
+                sync_tools.append(sync_tool)
+            else:
+                # 已经是同步的，直接使用
+                sync_tools.append(tool)
+                
+        except Exception as e:
+            print(f"[WARNING] 包装工具失败: {e}")
+            sync_tools.append(tool)
+    
+    print(f"[INFO] 成功包装 {len(sync_tools)} 个同步工具")
+    
+    # 打印可用工具名称
+    tool_names = [getattr(t, 'name', str(t)) for t in sync_tools]
+    print(f"[INFO] 可用工具: {tool_names}")
+    
+    # 创建 WeatherAgent
     weather_agent = create_react_agent(
         model=model,
-        tools=mcp_tools,
+        tools=sync_tools,
         name="WeatherAgent",
         prompt=(
-            "你是 WeatherAgent，只负责天气与出行提醒。"
-            "优先调用 MCP 工具 `get_weather` 获取天气结果。"
-            "只输出天气和出行注意事项，不要回答活动或餐饮内容。"
+            "你是 WeatherAgent，只负责天气与出行提醒。\n\n"
+            "你有以下 MCP 工具可用：\n"
+            "- get_weather(city, date): 获取指定城市在目标日期的天气信息\n\n"
+            "工作流程：\n"
+            "1. 调用 get_weather 获取用户指定城市和日期的天气\n"
+            "2. 根据天气给出出行建议（如带伞、防晒、增减衣物）\n\n"
+            "只输出天气信息和出行注意事项，不要回答活动或餐饮内容。"
         ),
     )
+    
+    # 创建 ActivityAgent
     activity_agent = create_react_agent(
         model=model,
-        tools=mcp_tools,
+        tools=sync_tools,
         name="ActivityAgent",
         prompt=(
-            "你是 ActivityAgent，只负责活动、景点和路线方向。"
-            "当前工具来自统一的 MCP Client；如果没有完全匹配的活动工具，"
-            "你可以基于用户输入、天气结果和城市常识给出简洁建议。"
+            "你是 ActivityAgent，负责活动、景点和路线规划。\n\n"
+            "你有以下 MCP 工具可用：\n"
+            "1. search_activities(city, keyword, limit) - 搜索目的地的景点、活动、节庆等\n"
+            "2. plan_route(activities, start_point) - 规划多个活动的游览顺序和交通时间\n\n"
+            "工作流程：\n"
+            "第一步：调用 search_activities 搜索景点\n"
+            "第二步：构建活动列表，每个活动包含 name 和 location\n"
+            "第三步：调用 plan_route 规划最优游览顺序\n\n"
             "不要回答餐饮内容。"
         ),
     )
+    
+    # 创建 FoodAgent
     food_agent = create_react_agent(
         model=model,
-        tools=mcp_tools,
+        tools=sync_tools,
         name="FoodAgent",
         prompt=(
-            "你是 FoodAgent，只负责餐厅和用餐建议。"
-            "当前工具来自统一的 MCP Client；如果没有完全匹配的餐饮工具，"
-            "你可以基于用户预算、口味偏好、天气结果和城市常识给出简洁建议。"
+            "你是 FoodAgent，只负责餐厅和用餐建议。\n\n"
+            "基于用户的口味偏好和预算，推荐合适的餐厅或菜系。\n"
+            "结合活动位置，建议就近用餐。\n"
             "不要回答活动内容。"
         ),
     )
 
+    # 创建 Supervisor
     workflow = create_supervisor(
         [weather_agent, activity_agent, food_agent],
         model=model,
@@ -233,6 +353,7 @@ def build_travel_graph():
         parallel_tool_calls=False,
         supervisor_name="TravelSupervisor",
     )
+    
     return workflow.compile(name="travel_planner_supervisor")
 
 
@@ -256,6 +377,8 @@ def build_user_request(
 - 口味偏好：{taste}
 - 出发地点：{departure_text}
 
+⚠️ 重要：如果出发地点不为空，ActivityAgent 在调用 plan_route 时必须将其作为 start_point 参数传入。
+
 要求：
 1. 结果必须使用 Markdown
 2. 用 `# 最终行程建议` 作为主标题
@@ -263,7 +386,6 @@ def build_user_request(
 4. 如果信息不足，可以做合理假设，但要明确写出假设
 5. 必须综合天气、活动、餐饮三个维度
 """.strip()
-
 
 def run_travel_graph(
     city: str,

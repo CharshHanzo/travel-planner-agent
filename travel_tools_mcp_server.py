@@ -3,10 +3,17 @@ from mcp.server.fastmcp import FastMCP
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
+AMAP_API_KEY = os.getenv("AMAP_API_KEY")  # 新增：高德地图 API Key
+
 # 配置区域
 FORECAST_BASE_URL = "https://api.openweathermap.org/data/2.5/forecast"
 GEOCODING_BASE_URL = "http://api.openweathermap.org/geo/1.0/direct"
+FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
+AMAP_BASE_URL = "https://restapi.amap.com/v3"
+
 
 # API 端点
 mcp = FastMCP(
@@ -128,9 +135,7 @@ async def get_weather_by_date(city: str, target_date: str):
         return {"error": f"未找到{city}的天气预报数据"}
 
 
-
-
-# MCP 工具函数
+# Weather Agent 工具函数
 @mcp.tool()
 async def get_weather(city: str, date: str) -> str:
     """
@@ -164,6 +169,257 @@ async def get_weather(city: str, date: str) -> str:
         f"天气：{weather_data['weather_desc']}{rain_info}\n"
     )
 
+# Activity Agent 工具函数
+# 辅助函数
+async def _geocode(address: str) -> str:
+    """地址转坐标，返回 '经度,纬度'"""
+    if not AMAP_API_KEY:
+        return None
+    
+    async with httpx.AsyncClient() as client:
+        params = {
+            "key": AMAP_API_KEY,
+            "address": address
+        }
+        response = await client.get(f"{AMAP_BASE_URL}/geocode/geo", params=params)
+        
+        if response.status_code != 200:
+            return None
+        
+        data = response.json()
+        if data.get("status") == "1" and data.get("geocodes"):
+            return data["geocodes"][0]["location"]
+    
+    return None
 
+async def _get_distance(origin: str, dest: str) -> dict:
+    """获取两点间的驾车距离（公里）和时间（分钟）"""
+    if not AMAP_API_KEY:
+        return {"distance_km": 0, "duration_min": 0}
+    
+    async with httpx.AsyncClient() as client:
+        params = {
+            "key": AMAP_API_KEY,
+            "origins": origin,
+            "destination": dest,
+            "type": 0  # 0: 驾车距离
+        }
+        response = await client.get(f"{AMAP_BASE_URL}/distance", params=params)
+        
+        if response.status_code != 200:
+            return {"distance_km": 0, "duration_min": 0}
+        
+        data = response.json()
+        if data.get("status") == "1" and data.get("results"):
+            result = data["results"][0]
+            distance_m = int(result.get("distance", 0))
+            duration_s = int(result.get("duration", 0))
+            return {
+                "distance_km": round(distance_m / 1000, 1),
+                "duration_min": round(duration_s / 60, 1)
+            }
+    
+    return {"distance_km": 0, "duration_min": 0}
+
+@mcp.tool()
+async def search_activities(city: str, keyword: str = "景点", limit: int = 10) -> dict:
+    """
+    搜索目的地的景点、活动、节庆等
+    
+    Args:
+        city: 城市名称，如"杭州"
+        keyword: 搜索类型，如"景点"、"演出"、"亲子"、"博物馆"
+        limit: 返回数量，默认10
+    
+    Returns:
+        活动列表，每个活动包含名称、描述和位置信息
+    """
+    if not FIRECRAWL_API_KEY:
+        return {"error": "未配置 Firecrawl API Key，请在 .env 文件中设置 FIRECRAWL_API_KEY"}
+    
+    # 构建搜索查询
+    query = f"{city} {keyword} 推荐 攻略"
+    
+    async with httpx.AsyncClient() as client:
+        headers = {
+            "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "query": query,
+            "limit": limit,
+            "formats": ["markdown"]
+        }
+        
+        try:
+            response = await client.post(
+                f"{FIRECRAWL_BASE_URL}/search",
+                headers=headers,
+                json=payload,
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                return {"error": f"搜索失败：{response.status_code}"}
+            
+            data = response.json()
+            
+            if not data.get("success"):
+                return {"error": data.get("error", "搜索失败")}
+            
+            results = []
+            for item in data.get("data", []):
+                metadata = item.get("metadata", {})
+                content = item.get("markdown", "")
+                
+                # 尝试从内容中提取位置信息
+                location_hint = None
+                for line in content.split("\n")[:20]:  # 只看前20行
+                    if "地址" in line or "位置" in line or "位于" in line:
+                        location_hint = line.strip()
+                        break
+                
+                results.append({
+                    "name": metadata.get("title", "").split(" - ")[0],
+                    "description": content[:300] + "..." if len(content) > 300 else content,
+                    "location_hint": location_hint,
+                    "source_url": metadata.get("sourceURL", "")
+                })
+            
+            return {
+                "city": city,
+                "keyword": keyword,
+                "count": len(results),
+                "activities": results
+            }
+        
+        except Exception as e:
+            return {"error": f"请求异常：{str(e)}"}
+
+@mcp.tool()
+async def plan_route(activities: list, start_point: str = None) -> dict:
+    """
+    规划多个活动的游览顺序
+    
+    Args:
+        activities: 活动列表，格式 [{"name": "故宫", "location": "北京市东城区景山前街4号"}, ...]
+                    location 可以是详细地址或"经度,纬度"坐标
+        start_point: 起点坐标（可选），格式"经度,纬度"
+    
+    Returns:
+        优化后的顺序和交通时间
+    """
+    if len(activities) < 2:
+        return {
+            "error": "至少需要2个活动才能规划路线",
+            "optimized_order": [act.get("name", "未知") for act in activities]
+        }
+    
+    if not AMAP_API_KEY:
+        return {
+            "error": "未配置高德地图 API Key，无法计算路线",
+            "optimized_order": [act.get("name", "未知") for act in activities],
+            "note": "仅返回原始顺序，未优化"
+        }
+    
+    # 1. 获取所有坐标
+    coords = []
+    names = []
+    failed = []
+    
+    for act in activities:
+        name = act.get("name", "未知")
+        loc = act.get("location", "")
+        
+        names.append(name)
+        
+        # 判断是坐标还是地址
+        if "," in loc and len(loc.split(",")) == 2:
+            # 已经是坐标格式
+            coords.append(loc)
+        elif loc:
+            # 需要地理编码
+            coord = await _geocode(f"{loc} {name}")
+            if coord:
+                coords.append(coord)
+            else:
+                failed.append(name)
+                coords.append(None)
+        else:
+            failed.append(name)
+            coords.append(None)
+    
+    if failed:
+        return {
+            "error": f"无法定位以下活动：{', '.join(failed)}",
+            "optimized_order": names,
+            "note": "请为这些活动提供更详细的位置信息"
+        }
+    
+    # 2. 计算距离矩阵
+    n = len(coords)
+    dist_matrix = [[0] * n for _ in range(n)]
+    time_matrix = [[0] * n for _ in range(n)]
+    
+    for i in range(n):
+        for j in range(i + 1, n):
+            result = await _get_distance(coords[i], coords[j])
+            dist_matrix[i][j] = result["distance_km"]
+            dist_matrix[j][i] = result["distance_km"]
+            time_matrix[i][j] = result["duration_min"]
+            time_matrix[j][i] = result["duration_min"]
+    
+    # 3. 贪心算法求最优顺序
+    # 如果有起点，从起点开始；否则从第一个活动开始
+    if start_point:
+        # 找到离起点最近的活动作为第一个
+        distances_to_start = []
+        for coord in coords:
+            result = await _get_distance(start_point, coord)
+            distances_to_start.append(result["distance_km"])
+        start_idx = distances_to_start.index(min(distances_to_start))
+    else:
+        start_idx = 0
+    
+    unvisited = set(range(n))
+    unvisited.remove(start_idx)
+    order = [start_idx]
+    current = start_idx
+    
+    while unvisited:
+        next_idx = min(unvisited, key=lambda x: dist_matrix[current][x])
+        order.append(next_idx)
+        unvisited.remove(next_idx)
+        current = next_idx
+    
+    # 4. 计算总时间和分段详情
+    total_distance = 0
+    total_time = 0
+    segments = []
+    
+    for i in range(len(order) - 1):
+        frm, to = order[i], order[i + 1]
+        total_distance += dist_matrix[frm][to]
+        total_time += time_matrix[frm][to]
+        segments.append({
+            "from": names[frm],
+            "to": names[to],
+            "distance_km": dist_matrix[frm][to],
+            "duration_min": time_matrix[frm][to]
+        })
+    
+    # 5. 返回结果
+    optimized_activities = [activities[idx] for idx in order]
+    
+    return {
+        "original_order": names,
+        "optimized_order": [names[idx] for idx in order],
+        "optimized_activities": optimized_activities,
+        "total_distance_km": round(total_distance, 1),
+        "total_duration_min": round(total_time, 1),
+        "total_duration_text": f"{int(total_time)}分钟" if total_time < 60 else f"{int(total_time // 60)}小时{int(total_time % 60)}分钟",
+        "segments": segments,
+        "suggestion": "建议按优化后的顺序游览" if total_time > 0 else None
+    }
 if __name__ == "__main__":
     mcp.run(transport="sse")
