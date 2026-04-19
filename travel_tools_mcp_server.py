@@ -1,11 +1,14 @@
 import httpx
 import json
+import math
 from mcp.server.fastmcp import FastMCP
 import os
 from dotenv import load_dotenv
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any, List
+from asyncio import Semaphore
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 # 配置日志
 logging.basicConfig(
@@ -14,17 +17,39 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# 环境变量加载优化
+env_file = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(env_file):
+    load_dotenv(env_file)
+    logger.info(f"已加载配置文件: {env_file}")
+else:
+    logger.warning(f"未找到配置文件: {env_file}，将使用系统环境变量")
 
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
 AMAP_API_KEY = os.getenv("AMAP_API_KEY")
+
+def validate_config() -> bool:
+    """验证必要的配置"""
+    missing_keys = []
+    if not OPENWEATHER_API_KEY:
+        missing_keys.append("OPENWEATHER_API_KEY")
+    if not AMAP_API_KEY:
+        missing_keys.append("AMAP_API_KEY")
+    
+    if missing_keys:
+        logger.warning(f"缺少API配置: {', '.join(missing_keys)}")
+        return False
+    return True
 
 # 配置区域
 FORECAST_BASE_URL = "https://api.openweathermap.org/data/2.5/forecast"
 GEOCODING_BASE_URL = "http://api.openweathermap.org/geo/1.0/direct"
 FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
 AMAP_BASE_URL = "https://restapi.amap.com/v3"
+
+# 全局信号量控制并发
+api_semaphore = Semaphore(5)  # 最多5个并发请求
 
 # API 端点
 mcp = FastMCP(
@@ -36,28 +61,30 @@ mcp = FastMCP(
 )
 
 # 辅助函数
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def get_coordinates(city: str):
     """根据城市名称获取经纬度坐标"""
     logger.info(f"[地理编码] 开始查询城市: {city}")
     
-    async with httpx.AsyncClient() as client:
-        params = {
-            "q": city,
-            "limit": 1,
-            "appid": OPENWEATHER_API_KEY
-        }
-        response = await client.get(GEOCODING_BASE_URL, params=params)
-        
-        logger.info(f"[地理编码] API 响应状态: {response.status_code}")
-        
-        if response.status_code != 200 or not response.json():
-            logger.error(f"[地理编码] 未找到城市: {city}")
-            return None, None
-        
-        data = response.json()[0]
-        lat, lon = data.get("lat"), data.get("lon")
-        logger.info(f"[地理编码] 成功获取坐标: {city} -> ({lat}, {lon})")
-        return lat, lon
+    async with api_semaphore:
+        async with httpx.AsyncClient() as client:
+            params = {
+                "q": city,
+                "limit": 1,
+                "appid": OPENWEATHER_API_KEY
+            }
+            response = await client.get(GEOCODING_BASE_URL, params=params)
+            
+            logger.info(f"[地理编码] API 响应状态: {response.status_code}")
+            
+            if response.status_code != 200 or not response.json():
+                logger.error(f"[地理编码] 未找到城市: {city}")
+                return None, None
+            
+            data = response.json()[0]
+            lat, lon = data.get("lat"), data.get("lon")
+            logger.info(f"[地理编码] 成功获取坐标: {city} -> ({lat}, {lon})")
+            return lat, lon
 
 def parse_date(date_str: str) -> str:
     """解析用户输入的日期"""
@@ -83,6 +110,7 @@ def parse_date(date_str: str) -> str:
     logger.info(f"[日期解析] 保持原格式: {date_str}")
     return date_str
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
 async def get_weather_by_date(city: str, target_date: str):
     """获取指定日期的天气预报"""
     logger.info(f"[天气查询] 开始查询: city={city}, date={target_date}")
@@ -94,18 +122,19 @@ async def get_weather_by_date(city: str, target_date: str):
         return {"error": f"未找到城市：{city}"}
     
     # 2. 获取5天预报数据
-    async with httpx.AsyncClient() as client:
-        params = {
-            "lat": lat,
-            "lon": lon,
-            "appid": OPENWEATHER_API_KEY,
-            "units": "metric",
-            "lang": "zh_cn",
-            "cnt": 40
-        }
-        
-        logger.info(f"[天气查询] 请求 OpenWeather API: lat={lat}, lon={lon}")
-        response = await client.get(FORECAST_BASE_URL, params=params)
+    async with api_semaphore:
+        async with httpx.AsyncClient() as client:
+            params = {
+                "lat": lat,
+                "lon": lon,
+                "appid": OPENWEATHER_API_KEY,
+                "units": "metric",
+                "lang": "zh_cn",
+                "cnt": 40
+            }
+            
+            logger.info(f"[天气查询] 请求 OpenWeather API: lat={lat}, lon={lon}")
+            response = await client.get(FORECAST_BASE_URL, params=params)
         
         logger.info(f"[天气查询] OpenWeather API 响应状态: {response.status_code}")
         
@@ -162,6 +191,17 @@ async def get_weather(city: str, date: str) -> str:
     logger.info(f"[Tool:get_weather] ========== 开始执行 ==========")
     logger.info(f"[Tool:get_weather] 参数: city={city}, date={date}")
     
+    # 添加参数验证
+    if not city or not city.strip():
+        error_msg = "❌ 城市名称不能为空"
+        logger.error(f"[Tool:get_weather] {error_msg}")
+        return error_msg
+    
+    if not date:
+        error_msg = "❌ 日期不能为空"
+        logger.error(f"[Tool:get_weather] {error_msg}")
+        return error_msg
+    
     try:
         weather_data = await get_weather_by_date(city, date)
         
@@ -194,7 +234,7 @@ async def get_weather(city: str, date: str) -> str:
         return error_msg
 
 # 辅助函数：地址转坐标
-async def _geocode(address: str) -> str:
+async def _geocode(address: str) -> Optional[str]:
     """地址转坐标，返回 '经度,纬度'"""
     logger.info(f"[地理编码] 开始编码地址: {address}")
     
@@ -202,14 +242,15 @@ async def _geocode(address: str) -> str:
         logger.warning("[地理编码] 未配置高德 API Key")
         return None
     
-    async with httpx.AsyncClient() as client:
-        params = {
-            "key": AMAP_API_KEY,
-            "address": address
-        }
-        
-        # 尝试详细地址
-        response = await client.get(f"{AMAP_BASE_URL}/geocode/geo", params=params)
+    async with api_semaphore:
+        async with httpx.AsyncClient() as client:
+            params = {
+                "key": AMAP_API_KEY,
+                "address": address
+            }
+            
+            # 尝试详细地址
+            response = await client.get(f"{AMAP_BASE_URL}/geocode/geo", params=params)
         
         if response.status_code != 200:
             logger.error(f"[地理编码] API 请求失败: {response.status_code}")
@@ -238,6 +279,39 @@ async def _geocode(address: str) -> str:
     
     logger.warning(f"[地理编码] 所有尝试失败: {address}")
     return None
+
+def get_mock_activities(city: str, keyword: str, limit: int) -> dict:
+    """返回模拟数据"""
+    logger.info(f"[Mock数据] 生成 {city} 的模拟活动数据")
+    
+    mock_activities = {
+        "广州": [
+            {"name": "广州塔", "description": "广州地标建筑，塔高600米，可俯瞰全城美景", "location_hint": "海珠区阅江西路222号", "location": "113.324553,23.106414"},
+            {"name": "珠江夜游", "description": "乘坐游船欣赏珠江两岸璀璨夜景", "location_hint": "越秀区沿江路", "location": "113.264385,23.129112"},
+            {"name": "陈家祠", "description": "岭南建筑艺术瑰宝，广东民间工艺博物馆", "location_hint": "荔湾区中山七路", "location": "113.248833,23.126272"},
+            {"name": "白云山", "description": "广州\"市肺\"，登高望远的好去处", "location_hint": "白云区广园中路", "location": "113.293121,23.185912"},
+            {"name": "沙面", "description": "欧陆风情建筑群，拍照打卡圣地", "location_hint": "荔湾区沙面南街", "location": "113.240147,23.109641"}
+        ],
+        "北京": [
+            {"name": "故宫", "description": "明清皇家宫殿，世界文化遗产", "location_hint": "东城区景山前街4号", "location": "116.397128,39.916527"},
+            {"name": "长城", "description": "世界七大奇迹之一，中国古代军事防御工程", "location_hint": "延庆区八达岭", "location": "116.014701,40.363369"},
+            {"name": "颐和园", "description": "皇家园林博物馆", "location_hint": "海淀区新建宫门路19号", "location": "116.275547,39.999982"}
+        ]
+    }
+    
+    activities = mock_activities.get(city, [
+        {"name": f"{city}著名景点", "description": f"{city}的知名景点推荐", "location_hint": f"{city}市中心", "location": ""}
+    ])[:limit]
+    
+    return {
+        "city": city,
+        "keyword": keyword,
+        "count": len(activities),
+        "activities": activities,
+        "source": "模拟数据",
+        "note": "💡 提示：使用模拟数据，配置高德地图 API Key 可获取真实数据"
+    }
+
 
 # Activity Agent 工具函数
 @mcp.tool()
@@ -315,38 +389,6 @@ async def search_activities(city: str, keyword: str = "景点", limit: int = 10)
         }
         logger.error(f"[Tool:search_activities] 异常: {e}", exc_info=True)
         return error_result
-
-def get_mock_activities(city: str, keyword: str, limit: int) -> dict:
-    """返回模拟数据"""
-    logger.info(f"[Mock数据] 生成 {city} 的模拟活动数据")
-    
-    mock_activities = {
-        "广州": [
-            {"name": "广州塔", "description": "广州地标建筑，塔高600米，可俯瞰全城美景", "location_hint": "海珠区阅江西路222号", "location": "113.324553,23.106414"},
-            {"name": "珠江夜游", "description": "乘坐游船欣赏珠江两岸璀璨夜景", "location_hint": "越秀区沿江路", "location": "113.264385,23.129112"},
-            {"name": "陈家祠", "description": "岭南建筑艺术瑰宝，广东民间工艺博物馆", "location_hint": "荔湾区中山七路", "location": "113.248833,23.126272"},
-            {"name": "白云山", "description": "广州\"市肺\"，登高望远的好去处", "location_hint": "白云区广园中路", "location": "113.293121,23.185912"},
-            {"name": "沙面", "description": "欧陆风情建筑群，拍照打卡圣地", "location_hint": "荔湾区沙面南街", "location": "113.240147,23.109641"}
-        ],
-        "北京": [
-            {"name": "故宫", "description": "明清皇家宫殿，世界文化遗产", "location_hint": "东城区景山前街4号", "location": "116.397128,39.916527"},
-            {"name": "长城", "description": "世界七大奇迹之一，中国古代军事防御工程", "location_hint": "延庆区八达岭", "location": "116.014701,40.363369"},
-            {"name": "颐和园", "description": "皇家园林博物馆", "location_hint": "海淀区新建宫门路19号", "location": "116.275547,39.999982"}
-        ]
-    }
-    
-    activities = mock_activities.get(city, [
-        {"name": f"{city}著名景点", "description": f"{city}的知名景点推荐", "location_hint": f"{city}市中心", "location": ""}
-    ])[:limit]
-    
-    return {
-        "city": city,
-        "keyword": keyword,
-        "count": len(activities),
-        "activities": activities,
-        "source": "模拟数据",
-        "note": "💡 提示：使用模拟数据，配置高德地图 API Key 可获取真实数据"
-    }
 
 @mcp.tool()
 async def plan_route(activities: list, start_point: str = None) -> dict:
@@ -494,6 +536,8 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
             logger.info(f"  {names[i]}: {', '.join(row)}km")
         
         # 4. 使用贪心算法求最优顺序（TSP问题近似解）
+        logger.info("[Tool:plan_route] 确定起始点...")
+        
         if start_point:
             # 有起点：计算各点到起点的距离
             logger.info(f"[Tool:plan_route] 计算到起点的距离: {start_point}")
@@ -508,6 +552,7 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
         else:
             # 没有起点：从第一个活动开始
             start_idx = 0
+            logger.info("[Tool:plan_route] 未指定起点，从第一个活动开始")
         
         # 贪心算法：每次选择最近的下一个点
         unvisited = set(range(n))
@@ -587,11 +632,10 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
 
 def estimate_distance(coord1: str, coord2: str) -> float:
     """估算两个坐标之间的直线距离（公里）- 使用Haversine公式"""
-    from math import radians, sin, cos, sqrt, atan2
     
     def parse_coord(coord):
         lng, lat = map(float, coord.split(','))
-        return radians(lat), radians(lng)
+        return math.radians(lat), math.radians(lng)
     
     lat1, lon1 = parse_coord(coord1)
     lat2, lon2 = parse_coord(coord2)
@@ -599,8 +643,8 @@ def estimate_distance(coord1: str, coord2: str) -> float:
     # Haversine公式
     dlon = lon2 - lon1
     dlat = lat2 - lat1
-    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-    c = 2 * atan2(sqrt(a), sqrt(1-a))
+    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     
     # 地球半径（公里）
     R = 6371

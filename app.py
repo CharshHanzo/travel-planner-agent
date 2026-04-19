@@ -1,7 +1,14 @@
 import asyncio
 import os
-import inspect
+import logging
+import signal
+import sys
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
+import functools
+from contextlib import contextmanager
+from typing import Optional
+import inspect
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -9,6 +16,64 @@ from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import StructuredTool
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# 全局线程池，避免重复创建
+_THREAD_POOL = ThreadPoolExecutor(max_workers=10)
+
+@contextmanager
+def timeout(seconds: int):
+    """跨平台的超时上下文管理器"""
+    if sys.platform == 'win32':
+         # Windows 不支持 SIGALRM，使用线程方式
+        import threading
+        import time
+         
+        class TimeoutThread(threading.Thread):
+            def __init__(self, timeout_seconds):
+                super().__init__()
+                self.timeout_seconds = timeout_seconds
+                self.timed_out = False
+                
+            def run(self):
+                time.sleep(self.timeout_seconds)
+                self.timed_out = True
+        
+        # 启动超时监控线程
+        timeout_thread = TimeoutThread(seconds)
+        timeout_thread.daemon = True
+        timeout_thread.start()
+        
+        try:
+            yield
+            # 如果任务完成，停止超时线程
+            timeout_thread.timed_out = True
+        except:
+            # 如果发生异常，也停止超时线程
+            timeout_thread.timed_out = True
+            raise
+        finally:
+            # 检查是否超时
+            if timeout_thread.is_alive():
+                raise TimeoutError(f"操作超时（{seconds}秒）")
+    else:
+        # Unix/Linux/Mac 使用信号
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"操作超时（{seconds}秒）")
+        
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
 load_dotenv()
 
@@ -116,15 +181,9 @@ def init_state() -> None:
 
 
 def run_async(coro):
-    """安全地运行异步函数"""
-    import concurrent.futures
-    
-    def _run():
-        return asyncio.run(coro)
-    
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        future = executor.submit(_run)
-        return future.result()
+    """使用全局线程池运行异步函数"""
+    future = _THREAD_POOL.submit(asyncio.run, coro)
+    return future.result()
 
 
 def get_mcp_import_error() -> str | None:
@@ -191,20 +250,20 @@ def build_mcp_tools():
         
         async def _get_tools():
             tools = await client.get_tools()
-            print(f"[INFO] 成功获取 {len(tools)} 个MCP工具")
+            logger.info(f"成功获取 {len(tools)} 个MCP工具")
             for tool in tools:
-                print(f"[INFO]   - {tool.name}")
+                logger.info(f"  - {tool.name}")
             return tools
         
         mcp_tools = run_async(_get_tools())
         return mcp_tools
     except Exception as e:
-        print(f"[ERROR] 获取MCP工具失败: {e}")
+        logger.error(f"获取MCP工具失败: {e}")
         st.error(f"无法连接到 MCP 服务器，请确保 travel_tools_server.py 已启动。错误: {e}")
         return []
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(ttl=300, show_spinner=False)  # 5分钟过期
 def build_travel_graph():
     """
     构建多智能体旅行规划图
@@ -227,19 +286,11 @@ def build_travel_graph():
     )
 
     def create_sync_wrapper(async_func, name: str, description: str, args_schema=None):
-        """创建同步包装器"""
+        @functools.wraps(async_func)
         def sync_func(**kwargs):
-            """同步执行异步函数"""
-            try:
-                asyncio.get_running_loop()
-                # 已经有事件循环，在新线程中运行
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, async_func(**kwargs))
-                    return future.result()
-            except RuntimeError:
-                # 没有事件循环，直接运行
-                return asyncio.run(async_func(**kwargs))
+            # 始终在新线程中运行，避免事件循环冲突
+            future = _THREAD_POOL.submit(asyncio.run, async_func(**kwargs))
+            return future.result()
         
         return StructuredTool.from_function(
             func=sync_func,
@@ -279,19 +330,20 @@ def build_travel_graph():
                 sync_tools.append(tool)
                 
         except Exception as e:
-            print(f"[WARNING] 包装工具失败: {e}")
+            logger.warning(f"包装工具失败: {e}")
             sync_tools.append(tool)
     
-    print(f"[INFO] 成功包装 {len(sync_tools)} 个同步工具")
+    logger.info(f"成功包装 {len(sync_tools)} 个同步工具")
     
     # 打印可用工具名称
     tool_names = [getattr(t, 'name', str(t)) for t in sync_tools]
-    print(f"[INFO] 可用工具: {tool_names}")
+    logger.info(f"可用工具: {tool_names}")
     
     # 创建 WeatherAgent
+    weather_tools = [t for t in sync_tools if t.name == 'get_weather']
     weather_agent = create_react_agent(
         model=model,
-        tools=sync_tools,
+        tools=weather_tools,
         name="WeatherAgent",
         prompt=(
             "你是 WeatherAgent，只负责天气与出行提醒。\n\n"
@@ -315,9 +367,10 @@ def build_travel_graph():
     )
     
     # 创建 ActivityAgent
+    activity_tools = [t for t in sync_tools if t.name in ['search_activities', 'plan_route']]
     activity_agent = create_react_agent(
         model=model,
-        tools=sync_tools,
+        tools=activity_tools,
         name="ActivityAgent",
         prompt=(
             "你是 ActivityAgent，负责活动、景点和路线规划。\n\n"
@@ -339,9 +392,15 @@ def build_travel_graph():
     )
     
     # 创建 FoodAgent
+    food_tools = [t for t in sync_tools if t.name in [
+        'search_restaurants',
+        'recommend_meal_plan',
+        'get_restaurant_detail',
+        'recommend_by_cuisine'
+    ]]
     food_agent = create_react_agent(
         model=model,
-        tools=sync_tools,
+        tools=food_tools,
         name="FoodAgent",
         prompt=(
             "你是 FoodAgent，只负责餐厅和用餐建议。\n\n"
@@ -385,6 +444,35 @@ def build_travel_graph():
     return workflow.compile(name="travel_planner_supervisor")
 
 
+def validate_inputs(city: str, travel_date: date, people_count: int, budget: int) -> tuple[bool, str]:
+    """验证用户输入"""
+    from datetime import timedelta
+    
+    if not city or not city.strip():
+        return False, "城市名称不能为空"
+    
+    if len(city) > 50:
+        return False, "城市名称过长"
+    
+    if people_count <= 0 or people_count > 20:
+        return False, "人数必须在1-20之间"
+    
+    if budget <= 0:
+        return False, "预算必须大于0"
+    
+    if budget > 100000:
+        return False, "预算不能超过100000元"
+    
+    # 检查日期是否合理
+    if travel_date < date.today():
+        return False, "不能选择过去的日期"
+    
+    if travel_date > date.today() + timedelta(days=30):
+        return False, "最多只能规划未来30天的行程"
+    
+    return True, ""
+
+
 def build_user_request(
     city: str,
     travel_date: date,
@@ -392,20 +480,42 @@ def build_user_request(
     budget: int,
     taste: str,
     departure: str,
+    activity_count: int = 3
 ) -> str:
     departure_text = departure.strip() if departure.strip() else "未提供"
+    
+    # 计算相对日期（修复日期逻辑bug）
+    from datetime import date as date_type, timedelta
+    today = date_type.today()
+    
+    def get_relative_date_str(travel_date: date, today: date) -> str:
+        delta = (travel_date - today).days
+        if delta == 0:
+            return "今天"
+        elif delta == 1:
+            return "明天"
+        elif delta == 2:
+            return "后天"
+        else:
+            return travel_date.strftime("%Y-%m-%d")
+    
+    date_str = get_relative_date_str(travel_date, today)
+    
     return f"""
 请为我生成一份城市出行建议，并综合天气、活动、餐饮三方面信息。
 
 用户信息：
 - 城市：{city}
-- 日期：{travel_date.strftime("%Y-%m-%d")}
+- 日期：{date_str}（对应 {travel_date.strftime("%Y-%m-%d")}）
 - 人数：{people_count}
 - 总预算：{budget} 元
 - 口味偏好：{taste}
 - 出发地点：{departure_text}
+- 推荐活动数量：{activity_count}
 
-⚠️ 重要：如果出发地点不为空，ActivityAgent 在调用 plan_route 时必须将其作为 start_point 参数传入。
+⚠️ 重要：
+- 如果出发地点不为空，ActivityAgent 在调用 plan_route 时必须将其作为 start_point 参数传入
+- ActivityAgent 搜索活动时请使用 limit={activity_count}
 
 要求：
 1. 结果必须使用 Markdown
@@ -422,45 +532,61 @@ def run_travel_graph(
     budget: int,
     taste: str,
     departure: str,
+    activity_count: int = 3,
+    timeout_seconds: int = 60
 ) -> str:
-    graph = build_travel_graph()
-    user_message = build_user_request(
-        city=city,
-        travel_date=travel_date,
-        people_count=people_count,
-        budget=budget,
-        taste=taste,
-        departure=departure,
-    )
-    latest_messages = []
-    visited_agents: set[str] = set()
+    """添加超时控制"""
+    try:
+        graph = build_travel_graph()
+        user_message = build_user_request(
+            city=city,
+            travel_date=travel_date,
+            people_count=people_count,
+            budget=budget,
+            taste=taste,
+            departure=departure,
+            activity_count=activity_count
+        )
+        latest_messages = []
+        visited_agents: set[str] = set()
 
-    with st.status("多智能体正在协作...", expanded=True) as status:
-        placeholder = st.empty()
-        placeholder.markdown(render_status_flow(visited_agents, current="TravelSupervisor"))
+        with st.status("多智能体正在协作...", expanded=True) as status:
+            placeholder = st.empty()
+            placeholder.markdown(render_status_flow(visited_agents, current="TravelSupervisor"))
 
-        for namespace, mode, data in graph.stream(
-            {"messages": [{"role": "user", "content": user_message}]},
-            stream_mode=["updates", "values"],
-            subgraphs=True,
-        ):
-            if mode == "updates":
-                active_agent = detect_active_agent(namespace, data)
-                if active_agent:
-                    visited_agents.add(active_agent)
-                    label = dict(STATUS_FLOW)[active_agent]
-                    placeholder.markdown(render_status_flow(visited_agents, current=active_agent))
-                    status.update(label=label, state="running", expanded=True)
-            elif mode == "values" and not namespace and isinstance(data, dict) and "messages" in data:
-                latest_messages = data["messages"]
+            # 使用超时控制
+            with timeout(timeout_seconds):
+                for namespace, mode, data in graph.stream(
+                    {"messages": [{"role": "user", "content": user_message}]},
+                    stream_mode=["updates", "values"],
+                    subgraphs=True,
+                ):
+                    if mode == "updates":
+                        active_agent = detect_active_agent(namespace, data)
+                        if active_agent:
+                            visited_agents.add(active_agent)
+                            label = dict(STATUS_FLOW)[active_agent]
+                            placeholder.markdown(render_status_flow(visited_agents, current=active_agent))
+                            status.update(label=label, state="running", expanded=True)
+                    elif mode == "values" and not namespace and isinstance(data, dict) and "messages" in data:
+                        latest_messages = data["messages"]
 
-        placeholder.markdown(render_status_flow(set(dict(STATUS_FLOW).keys())))
-        status.update(label="决策完成", state="complete", expanded=True)
+            placeholder.markdown(render_status_flow(set(dict(STATUS_FLOW).keys())))
+            status.update(label="决策完成", state="complete", expanded=True)
 
-    if not latest_messages:
-        raise RuntimeError("未从 LangGraph Supervisor 获取到最终消息。")
+        if not latest_messages:
+            raise RuntimeError("未从 LangGraph Supervisor 获取到最终消息。")
 
-    return extract_message_content(latest_messages[-1])
+        return extract_message_content(latest_messages[-1])
+    
+    except TimeoutError as e:
+        raise RuntimeError(f"任务执行超时：{e}")
+    except ConnectionError as e:
+        raise RuntimeError(f"无法连接到 MCP 服务器：{e}")
+    except ValueError as e:
+        raise RuntimeError(f"数据格式错误：{e}")
+    except Exception as e:
+        raise RuntimeError(f"未知错误：{e}")
 
 
 # ========== 主程序入口 ==========
@@ -470,12 +596,18 @@ mcp_import_error = get_mcp_import_error()
 # 检查 MCP 服务器是否可用
 @st.cache_resource(show_spinner=False)
 def check_mcp_server():
-    """检查 MCP 服务器是否可用"""
+    """更可靠的服务器健康检查"""
     try:
         import httpx
-        response = httpx.get("http://127.0.0.1:8000/sse", timeout=2.0)
-        return True
-    except:
+        # SSE 端点可能需要特定的请求头
+        response = httpx.get(
+            "http://127.0.0.1:8000/sse",
+            timeout=2.0,
+            headers={"Accept": "text/event-stream"}
+        )
+        # 检查响应状态和内容类型
+        return response.status_code == 200 and 'text/event-stream' in response.headers.get('content-type', '')
+    except (httpx.ConnectError, httpx.TimeoutException):
         return False
 
 mcp_available = check_mcp_server()
@@ -513,6 +645,7 @@ with st.form("travel_form"):
     with right_col:
         budget = st.number_input("预算（元）", min_value=0, value=300, step=50)
         taste = st.selectbox("口味偏好", ["辣", "清淡", "不挑"], index=2)
+        activity_count = st.slider("推荐活动数量", min_value=2, max_value=5, value=3)
         departure = st.text_input("出发地点（可选）", placeholder="例如：天河区、广州南站")
 
     submitted = st.form_submit_button(
@@ -525,17 +658,24 @@ with st.form("travel_form"):
 if submitted and DASHSCOPE_API_KEY and not mcp_import_error:
     st.session_state.request_error = ""
     st.session_state.result_markdown = ""
-    try:
-        st.session_state.result_markdown = run_travel_graph(
-            city=city.strip() or "广州",
-            travel_date=travel_date,
-            people_count=int(people_count),
-            budget=int(budget),
-            taste=taste,
-            departure=departure,
-        )
-    except Exception as exc:
-        st.session_state.request_error = f"调用 LangGraph Supervisor 失败：{exc}"
+    
+    # 验证输入
+    is_valid, error_msg = validate_inputs(city.strip(), travel_date, int(people_count), int(budget))
+    if not is_valid:
+        st.session_state.request_error = f"输入验证失败：{error_msg}"
+    else:
+        try:
+            st.session_state.result_markdown = run_travel_graph(
+                city=city.strip() or "广州",
+                travel_date=travel_date,
+                people_count=int(people_count),
+                budget=int(budget),
+                taste=taste,
+                departure=departure,
+                activity_count=int(activity_count)
+            )
+        except Exception as exc:
+            st.session_state.request_error = f"调用 LangGraph Supervisor 失败：{exc}"
 
 
 if st.session_state.request_error:
