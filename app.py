@@ -1,5 +1,6 @@
 import asyncio
 import os
+import inspect
 from datetime import date
 
 import streamlit as st
@@ -32,17 +33,23 @@ SUPERVISOR_PROMPT = """
     3. 最后交给 FoodAgent 获取餐饮建议
 
     重要提示：
-    - ActivityAgent 可以使用 search_activities 和 plan_route 工具来搜索活动和规划路线
+    - ActivityAgent 可以使用 search_activities 和 plan_route 工具
+    - FoodAgent 会从 WeatherAgent 的输出中解析天气信息
     - 不要跳过任何一个 Agent
-    - 如果某个 Agent 暂时没有完全匹配的工具，就让它基于用户输入、其他 Agent 的上下文和已有工具结果给出简洁建议
 
-    收集完三个 Agent 的结果后，再由你整合成最终答复。
+    收集完三个 Agent 的结果后，由你整合成最终答复。
 
     最终答复要求：
     1. 必须使用 Markdown
     2. 使用 `# 最终行程建议` 作为标题
-    3. 至少包含“天气与出行提醒”“活动建议”“餐饮建议”“推荐行程”“预算建议”
+    3. 必须包含以下章节：
+        - ## 天气与出行提醒
+        - ## 活动建议（包含具体景点和路线）
+        - ## 餐饮建议
+        - ## 推荐行程（时间线）
+        - ## 预算建议
     4. 内容简洁、可执行，不要暴露中间推理过程
+    5. 行程要紧凑但不过满，优先给出当天可执行的安排
     """.strip()
 
 
@@ -109,16 +116,15 @@ def init_state() -> None:
 
 
 def run_async(coro):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
+    """安全地运行异步函数"""
+    import concurrent.futures
+    
+    def _run():
         return asyncio.run(coro)
-
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+    
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(_run)
+        return future.result()
 
 
 def get_mcp_import_error() -> str | None:
@@ -169,63 +175,48 @@ def detect_active_agent(namespace: tuple[str, ...], data: object) -> str | None:
 
 
 @st.cache_resource(show_spinner=False)
-def build_mcp_client():
+def build_mcp_tools():
+    """构建MCP客户端并返回工具列表"""
     from langchain_mcp_adapters.client import MultiServerMCPClient
     
-    # 使用 sync 模式的客户端
-    client = MultiServerMCPClient(
-        {
-            "travel_tools": {
-                "transport": "sse",
-                "url": TRAVEL_TOOLS_MCP_URL,
+    try:
+        client = MultiServerMCPClient(
+            {
+                "travel_tools": {
+                    "transport": "sse",
+                    "url": TRAVEL_TOOLS_MCP_URL,
+                }
             }
-        }
-    )
-    
-    # 同步获取工具
-    tools = client.get_tools()  # 这里应该是同步的
-    
-    return client, tools
+        )
+        
+        async def _get_tools():
+            tools = await client.get_tools()
+            print(f"[INFO] 成功获取 {len(tools)} 个MCP工具")
+            for tool in tools:
+                print(f"[INFO]   - {tool.name}")
+            return tools
+        
+        mcp_tools = run_async(_get_tools())
+        return mcp_tools
+    except Exception as e:
+        print(f"[ERROR] 获取MCP工具失败: {e}")
+        st.error(f"无法连接到 MCP 服务器，请确保 travel_tools_server.py 已启动。错误: {e}")
+        return []
 
-import inspect 
+
 @st.cache_resource(show_spinner=False)
 def build_travel_graph():
     """
     构建多智能体旅行规划图
     """
-    import inspect
-    import asyncio
-    from langchain_core.tools import StructuredTool
-    from langchain_mcp_adapters.tools import load_mcp_tools
     
-    # 获取MCP客户端
-    client = build_mcp_client()
+    # 获取MCP工具
+    mcp_tools = build_mcp_tools()
     
-    # 正确获取工具 - 使用 load_mcp_tools
-    try:
-        # 方法1：使用 load_mcp_tools
-        tools = run_async(load_mcp_tools(client))
-        mcp_tools = list(tools) if tools else []
-    except Exception as e:
-        print(f"[ERROR] 加载MCP工具失败: {e}")
-        # 方法2：尝试直接获取
-        try:
-            mcp_tools = run_async(client.get_tools())
-            if isinstance(mcp_tools, tuple):
-                # 如果是元组，取第一个元素
-                mcp_tools = list(mcp_tools[0]) if mcp_tools[0] else []
-            elif not isinstance(mcp_tools, list):
-                mcp_tools = list(mcp_tools) if mcp_tools else []
-        except Exception as e2:
-            print(f"[ERROR] 备用方法也失败: {e2}")
-            mcp_tools = []
-
     print(f"[INFO] 加载了 {len(mcp_tools)} 个MCP工具")
     
     if not mcp_tools:
         print("[WARNING] 没有加载到任何工具，将使用无工具的Agent")
-        # 创建一个空的工具列表继续运行
-        mcp_tools = []
 
     # 创建模型
     model = ChatOpenAI(
@@ -309,7 +300,17 @@ def build_travel_graph():
             "工作流程：\n"
             "1. 调用 get_weather 获取用户指定城市和日期的天气\n"
             "2. 根据天气给出出行建议（如带伞、防晒、增减衣物）\n\n"
-            "只输出天气信息和出行注意事项，不要回答活动或餐饮内容。"
+            "输出格式要求（重要）：\n"
+            "最后必须输出一个 JSON 块，格式如下：\n"
+            "```json\n"
+            "{\n"
+            "  \"weather_desc\": \"天气描述，如：晴、小雨、多云等\",\n"
+            "  \"temperature\": 温度数值,\n"
+            "  \"advice\": \"出行建议文本\"\n"
+            "}\n"
+            "```\n\n"
+            "这个 JSON 将被传递给 FoodAgent 用于天气相关的餐饮推荐。\n\n"
+            "只输出天气信息、出行建议和上述 JSON，不要回答活动或餐饮内容。"
         ),
     )
     
@@ -323,10 +324,16 @@ def build_travel_graph():
             "你有以下 MCP 工具可用：\n"
             "1. search_activities(city, keyword, limit) - 搜索目的地的景点、活动、节庆等\n"
             "2. plan_route(activities, start_point) - 规划多个活动的游览顺序和交通时间\n\n"
+            "重要提示：\n"
+            "- search_activities 返回的结果中，每个活动包含 location 字段（坐标格式如 '113.324553,23.106414'）\n"
+            "- 在调用 plan_route 时，必须使用 search_activities 返回的完整活动对象\n"
+            "- plan_route 返回结果中的 optimized_activities 可以直接用于后续步骤\n"
+            "- 如果用户提供了出发地点（departure），必须将其作为 start_point 参数传入 plan_route\n\n"
             "工作流程：\n"
-            "第一步：调用 search_activities 搜索景点\n"
-            "第二步：构建活动列表，每个活动包含 name 和 location\n"
-            "第三步：调用 plan_route 规划最优游览顺序\n\n"
+            "第一步：调用 search_activities 搜索景点（limit=5）\n"
+            "第二步：从返回结果中提取 activities 列表（包含 name 和 location）\n"
+            "第三步：调用 plan_route，传入 activities 和 start_point（如果有）\n"
+            "第四步：从 plan_route 结果中提取 optimized_order 和 segments 用于最终输出\n\n"
             "不要回答餐饮内容。"
         ),
     )
@@ -338,9 +345,30 @@ def build_travel_graph():
         name="FoodAgent",
         prompt=(
             "你是 FoodAgent，只负责餐厅和用餐建议。\n\n"
-            "基于用户的口味偏好和预算，推荐合适的餐厅或菜系。\n"
-            "结合活动位置，建议就近用餐。\n"
-            "不要回答活动内容。"
+            "你有以下 MCP 工具可用：\n"
+            "1. search_restaurants(city, location, keyword, budget, taste, limit) - 搜索餐厅\n"
+            "2. recommend_meal_plan(activities, city, taste, budget, people_count, weather_context) - 推荐用餐计划\n"
+            "3. get_restaurant_detail(restaurant_id) - 获取餐厅详情\n"
+            "4. recommend_by_cuisine(city, cuisine, location, budget, limit) - 按菜系推荐\n\n"
+            "重要提示：\n"
+            "- recommend_meal_plan 的 weather_context 参数格式：{\"weather_desc\": \"晴\", \"temperature\": 25}\n"
+            "- 上一个 Agent（WeatherAgent）的输出末尾会有一个 JSON 块，格式如下：\n"
+            "  ```json\n"
+            "  {\"weather_desc\": \"天气描述\", \"temperature\": 温度数值, \"advice\": \"出行建议\"}\n"
+            "  ```\n"
+            "- 请从 WeatherAgent 的输出中解析这个 JSON，并传入 weather_context\n"
+            "- 如果无法解析天气信息，weather_context 可以传 None\n\n"
+            "工作流程：\n"
+            "第一步：解析天气信息（如果可用）\n"
+            "第二步：调用 recommend_meal_plan，传入 activities、city、taste、budget、people_count 和 weather_context\n"
+            "第三步：如果需要更详细的餐厅信息，调用 get_restaurant_detail\n"
+            "第四步：如果用户有特定菜系偏好，调用 recommend_by_cuisine\n\n"
+            "输出要求：\n"
+            "1. 推荐 2-3 家符合用户口味和预算的餐厅\n"
+            "2. 结合活动位置，建议就近用餐\n"
+            "3. 结合天气，给出用餐建议\n"
+            "4. 估算每餐费用\n"
+            "5. 不要回答活动内容"
         ),
     )
 
@@ -435,8 +463,24 @@ def run_travel_graph(
     return extract_message_content(latest_messages[-1])
 
 
+# ========== 主程序入口 ==========
 init_state()
 mcp_import_error = get_mcp_import_error()
+
+# 检查 MCP 服务器是否可用
+@st.cache_resource(show_spinner=False)
+def check_mcp_server():
+    """检查 MCP 服务器是否可用"""
+    try:
+        import httpx
+        response = httpx.get("http://127.0.0.1:8000/sse", timeout=2.0)
+        return True
+    except:
+        return False
+
+mcp_available = check_mcp_server()
+if not mcp_available:
+    st.warning("⚠️ MCP 服务器未启动，请先运行 travel_tools_server.py")
 
 st.markdown(
     """
@@ -459,7 +503,7 @@ elif mcp_import_error:
     )
 
 with st.form("travel_form"):
-    left_col, right_col = st.columns(2)  # 分为两列
+    left_col, right_col = st.columns(2)
 
     with left_col:
         city = st.text_input("城市", value="广州", placeholder="例如：广州")
@@ -513,3 +557,14 @@ else:
         """,
         unsafe_allow_html=True,
     )
+
+is_langgraph_cli = os.path.exists("langgraph.json")
+
+if is_langgraph_cli:
+    # LangGraph CLI 模式：导出 graph 供 Studio 使用
+    # 注意：这会立即构建 graph，可能需要几秒钟
+    travel_graph = build_travel_graph()
+else:
+    # Streamlit 模式：正常启动
+    # graph 会在用户提交表单时动态构建，不在这里导出
+    pass
