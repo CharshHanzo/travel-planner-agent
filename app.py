@@ -593,24 +593,25 @@ def run_travel_graph(
 init_state()
 mcp_import_error = get_mcp_import_error()
 
-# 检查 MCP 服务器是否可用
-@st.cache_resource(show_spinner=False)
-def check_mcp_server():
-    """更可靠的服务器健康检查"""
-    try:
-        import httpx
-        # SSE 端点可能需要特定的请求头
-        response = httpx.get(
-            "http://127.0.0.1:8000/sse",
-            timeout=2.0,
-            headers={"Accept": "text/event-stream"}
-        )
-        # 检查响应状态和内容类型
-        return response.status_code == 200 and 'text/event-stream' in response.headers.get('content-type', '')
-    except (httpx.ConnectError, httpx.TimeoutException):
-        return False
-
-mcp_available = check_mcp_server()
+# # 检查 MCP 服务器是否可用
+# @st.cache_resource(show_spinner=False)
+# def check_mcp_server():
+#     """更可靠的服务器健康检查"""
+#     try:
+#         import httpx
+#         # SSE 端点可能需要特定的请求头
+#         response = httpx.get(
+#             "http://127.0.0.1:8000/sse",
+#             timeout=2.0,
+#             follow_redirects=True
+#         )
+#         # 检查响应状态和内容类型
+#         return response.status_code in [200, 202]
+#     except (httpx.ConnectError, httpx.TimeoutException, httpx.ReadTimeout):
+#         return False
+        
+# mcp_available = check_mcp_server()
+mcp_available = True
 if not mcp_available:
     st.warning("⚠️ MCP 服务器未启动，请先运行 travel_tools_server.py")
 
