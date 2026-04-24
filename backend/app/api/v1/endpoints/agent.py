@@ -11,16 +11,26 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 服务实例
-planner_service = TravelPlannerService()
-
 @router.post("/stream")
-async def stream_agent_status(request: Request, travel_request: TravelRequest):
-    async def event_generator():
-        async for event in planner_service.plan_travel_stream(travel_request):
-            if await request.is_disconnected():
-                break
-            yield f"event: {event['event']}\n"
-            yield f"data: {json.dumps(event['data'])}\n\n"
+async def agent_stream(request: TravelRequest):
+    """Agent 流式规划端点"""
     
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    async def event_generator():
+        try:
+            service = TravelPlannerService()
+            async for event in service.plan_travel_stream(request):
+                event_type = event["event"]
+                event_data = json.dumps(event["data"], ensure_ascii=False)
+                yield f"event: {event_type}\ndata: {event_data}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {{\"error\": \"{str(e)}\"}}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )

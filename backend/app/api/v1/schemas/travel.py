@@ -9,7 +9,7 @@ class TravelRequest(BaseModel):
     budget: int = Field(..., ge=0, description="预算")
     taste: Literal["辣", "清淡", "不挑"] = Field(..., description="口味偏好")
     departure: Optional[str] = Field(None, description="出发地")
-    activity_count: int = Field(3, ge=2, le=5, description="每天活动数量")
+    activity_count: int = Field(3, ge=1, le=5, description="每天活动数量")
     
     @field_validator('travel_date')
     @classmethod

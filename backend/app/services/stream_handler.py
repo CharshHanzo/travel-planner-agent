@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 # 配置日志
@@ -19,48 +21,50 @@ class StreamHandler:
     async def process_stream(self, graph, user_message: str):
         """处理 graph.stream()，yield SSE 事件"""
         try:
-            async for namespace, mode, data in graph.stream(
-                {"messages": [{"role": "user", "content": user_message}]},
-                stream_mode=["updates", "values"],
-                subgraphs=True,
-            ):
+            def run_sync():
+                """在线程中运行同步生成器"""
+                results = []
+                for namespace, mode, data in graph.stream(
+                    {"messages": [{"role": "user", "content": user_message}]},
+                    stream_mode=["updates", "values"],
+                    subgraphs=True,
+                ):
+                    results.append((namespace, mode, data))
+                return results
+            
+            # 在线程池中运行同步流
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                results = await loop.run_in_executor(executor, run_sync)
+            
+            # 处理结果
+            latest_messages = []
+            for namespace, mode, data in results:
                 if mode == "updates":
                     active_agent = self._detect_agent(namespace, data)
                     if active_agent:
-                        # 发送运行状态
+                        self.visited_agents.add(active_agent)
                         yield {
                             "event": "agent_update",
                             "data": {
                                 "agent_name": active_agent,
                                 "status": "running",
-                                "message": self._get_status_message(active_agent, "running"),
-                                "timestamp": datetime.now().isoformat()
+                                "message": self._render_status_message(active_agent, "running"),
+                                "visited_agents": list(self.visited_agents)
                             }
                         }
-                        self.visited_agents.add(active_agent)
-                elif mode == "values" and not namespace and isinstance(data, dict) and "messages" in data:
-                    # 发送完成状态
-                    for agent_name, _ in self.status_flow:
-                        if agent_name in self.visited_agents:
-                            yield {
-                                "event": "agent_update",
-                                "data": {
-                                    "agent_name": agent_name,
-                                    "status": "completed",
-                                    "message": self._get_status_message(agent_name, "completed"),
-                                    "timestamp": datetime.now().isoformat()
-                                }
-                            }
-                    
-                    # 发送结果
-                    result_markdown = self._extract_final_message(data.get("messages", []))
-                    yield {
-                        "event": "result",
-                        "data": {
-                            "session_id": f"session-{datetime.now().timestamp()}",
-                            "result_markdown": result_markdown
-                        }
+                elif mode == "values":
+                    latest_messages = data.get("messages", [])
+            
+            # 发送最终结果
+            if latest_messages:
+                final_content = self._extract_final_message(latest_messages)
+                yield {
+                    "event": "complete",
+                    "data": {
+                        "result_markdown": final_content
                     }
+                }
         except Exception as e:
             logger.error(f"流式处理错误: {e}")
             yield {

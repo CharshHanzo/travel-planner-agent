@@ -2,3 +2,5 @@
 conda activate travel_plan_agent
 打开MCP服务器测试
 npx @modelcontextprotocol/inspector
+FastAPI测试
+服务器地址/docs
