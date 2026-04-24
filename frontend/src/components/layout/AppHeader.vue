@@ -13,7 +13,11 @@
         </router-link>
         <router-link to="/planner" class="nav-item" active-class="active">
           <el-icon><Calendar /></el-icon>
-          <span>规划</span>
+          <span>快速规划</span>
+        </router-link>
+        <router-link to="/plan-chat" class="nav-item" active-class="active">
+          <el-icon><ChatDotSquare /></el-icon>
+          <span>对话规划</span>
         </router-link>
         <router-link to="/history" class="nav-item" active-class="active">
           <el-icon><Clock /></el-icon>
@@ -57,7 +61,11 @@
       </router-link>
       <router-link to="/planner" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
         <el-icon><Calendar /></el-icon>
-        <span>规划</span>
+        <span>快速规划</span>
+      </router-link>
+      <router-link to="/plan-chat" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
+        <el-icon><ChatDotSquare /></el-icon>
+        <span>对话规划</span>
       </router-link>
       <router-link to="/history" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
         <el-icon><Clock /></el-icon>
@@ -73,7 +81,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { ArrowDown, House, Calendar, Clock, Setting, Menu } from '@element-plus/icons-vue'
+import { ArrowDown, House, Calendar, Clock, Setting, Menu, ChatDotSquare } from '@element-plus/icons-vue'
 
 const isMobile = ref(false)
 const showMobileMenu = ref(false)

@@ -9,6 +9,10 @@
         <el-icon><Calendar /></el-icon>
         <span>旅行规划</span>
       </router-link>
+      <router-link to="/plan-chat" class="nav-item" active-class="active">
+        <el-icon><ChatDotSquare /></el-icon>
+        <span>对话规划</span>
+      </router-link>
       <router-link to="/history" class="nav-item" active-class="active">
         <el-icon><Clock /></el-icon>
         <span>历史记录</span>
@@ -22,7 +26,7 @@
 </template>
 
 <script setup lang="ts">
-import { House, Calendar, Clock, Setting } from '@element-plus/icons-vue'
+import { House, Calendar, Clock, Setting, ChatDotSquare } from '@element-plus/icons-vue'
 </script>
 
 <style lang="scss">

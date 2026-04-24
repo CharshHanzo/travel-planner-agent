@@ -21,6 +21,14 @@ const router = createRouter({
       }
     },
     {
+      path: '/plan-chat',
+      name: 'plan-chat',
+      component: () => import('../views/ChatPlan.vue'),
+      meta: {
+        title: '对话式规划 - 智能旅行规划助手'
+      }
+    },
+    {
       path: '/history',
       name: 'history',
       component: () => import('../views/HistoryView.vue'),
