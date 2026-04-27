@@ -2,6 +2,7 @@ import { computed } from 'vue'
 import { useTravelStore } from '../stores/travel'
 import { useAgentStore } from '../stores/agent'
 import { TravelRequest } from '../types/travel'
+import { submitTravelPlan } from '../api'
 
 export function useTravelPlanner() {
   const travelStore = useTravelStore()
@@ -20,20 +21,16 @@ export function useTravelPlanner() {
     try {
       travelStore.setLoading(true)
       
-      // 直接调用API接口获取结果
-      const response = await fetch('/api/v1/travel/plan', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(request)
+      // 使用新的 submitTravelPlan 方法
+      const data = await submitTravelPlan({
+        city: request.city,
+        date: request.travel_date,
+        people: request.people_count,
+        budget: request.budget,
+        taste: request.taste,
+        departure: request.departure,
+        activity_count: request.activity_count
       })
-      
-      if (!response.ok) {
-        throw new Error('网络请求失败')
-      }
-      
-      const data = await response.json()
       travelStore.setResponse(data)
     } catch (err) {
       travelStore.setError(err instanceof Error ? err.message : '请求失败')

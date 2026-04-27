@@ -80,6 +80,7 @@ import { ref, onMounted, nextTick, watch } from 'vue'
 import { Loading, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
+import { sendChatMessage } from '@/api'
 
 interface Message {
   type: 'user' | 'ai'
@@ -137,68 +138,37 @@ const sendMessage = async () => {
   loading.value = true
   
   try {
-    // 调用 SSE 接口
-    const response = await fetch(`${import.meta.env.VITE_API_BASE_URL}/travel/plan-chat`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        message: message,
-        session_id: sessionId.value
-      })
-    })
-    
-    if (!response.ok) {
-      throw new Error(`请求失败: ${response.status}`)
-    }
-    
-    const reader = response.body?.getReader()
-    if (!reader) {
-      throw new Error('无响应体')
-    }
-    
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let currentMessageIndex = messages.value.length - 1
-    let aiResponse = ''
-    
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      
-      for (const line of lines) {
-        if (line.startsWith('event:')) {
-          const event = line.substring(6).trim()
-          
-          // 处理下一行的 data
-          const dataLineIndex = lines.indexOf(line) + 1
-          if (dataLineIndex < lines.length && lines[dataLineIndex].startsWith('data:')) {
-            const data = lines[dataLineIndex].substring(5).trim()
-            if (data) {
-              try {
-                const parsedData = JSON.parse(data)
-                
-                if (event === 'message' && parsedData.text) {
-                  aiResponse = parsedData.text
-                  messages.value[currentMessageIndex] = { type: 'ai', content: aiResponse }
-                  await scrollToBottom()
-                } else if (event === 'session' && parsedData.session_id) {
-                  sessionId.value = parsedData.session_id
-                } else if (event === 'done') {
-                  // 完成
-                }
-              } catch (error) {
-                console.error('解析 SSE 消息失败:', error)
-              }
-            }
-          }
-        }
+    // 调用新的 sendChatMessage 方法
+    await sendChatMessage(
+      { message, session_id: sessionId.value, context: {} },
+      {
+        onThinking: () => {
+          // 显示思考状态
+        },
+        onMessage: (text) => {
+          // 追加消息
+          messages.value[messages.value.length - 1] = { type: 'ai', content: text }
+          scrollToBottom()
+        },
+        onPlan: (markdown) => {
+          // 展示计划
+          messages.value[messages.value.length - 1] = { type: 'ai', content: markdown }
+          scrollToBottom()
+        },
+        onSession: (id) => {
+          // 保存 session_id
+          sessionId.value = id
+        },
+        onError: (msg) => {
+          // 错误处理
+          console.error('发送消息失败:', msg)
+          messages.value[messages.value.length - 1] = { type: 'ai', content: `抱歉，处理请求时出错了: ${msg}` }
+        },
+        onDone: () => {
+          // 完成
+        },
       }
-    }
+    )
   } catch (error) {
     console.error('发送消息失败:', error)
     messages.value[messages.value.length - 1] = { type: 'ai', content: '抱歉，处理请求时出错了，请重试。' }
@@ -248,19 +218,16 @@ const isPlanMessage = (content: string) => {
 
 // 初始化
 onMounted(() => {
-  // 生成会话 ID
   sessionId.value = generateSessionId()
   
-  // 监听输入框变化，自动调整高度
-  const textarea = document.querySelector('.chat-input textarea')
+  const textarea = document.querySelector('.chat-input textarea') as HTMLTextAreaElement | null
   if (textarea) {
-    textarea.addEventListener('input', function() {
-      this.style.height = 'auto'
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px'
+    textarea.addEventListener('input', () => {
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px'
     })
   }
   
-  // 监听视觉视口变化，适配移动端
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {
       scrollToBottom()
@@ -304,11 +271,11 @@ html, body {
     margin: 0 auto;
     .chat-messages {
       flex: 1;
-      padding: 24px 16px;
       overflow-y: auto;
       min-height: 0;
       display: flex;
       flex-direction: column;
+      max-height: calc(100vh - 200px); /* 限制最大高度，确保输入框可见 */
       
       // 欢迎页
       .welcome-panel {
@@ -552,6 +519,7 @@ html, body {
       padding: 16px;
       background-color: #f7f7f8;
       border-top: 1px solid #e5e5e5;
+      min-height: 120px; /* 确保输入框区域有最小高度 */
       
       .dark & {
         background-color: #1e1e2e;
@@ -623,6 +591,7 @@ html, body {
     .chat-container {
       .chat-messages {
         padding: 12px;
+        max-height: calc(100vh - 160px); /* 移动端调整最大高度 */
         
         .welcome-panel {
           .welcome-content {
@@ -645,6 +614,7 @@ html, body {
       
       .chat-input-container {
         padding: 10px;
+        min-height: 100px; /* 移动端调整最小高度 */
         
         .input-wrapper {
           gap: 8px;
