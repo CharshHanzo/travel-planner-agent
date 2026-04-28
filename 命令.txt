@@ -4,3 +4,10 @@ conda activate travel_plan_agent
 npx @modelcontextprotocol/inspector
 FastAPI测试
 服务器地址/docs
+
+运行MCP服务器
+python travel_tools_mcp_server.py
+运行后端服务
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+运行前端服务
+npm run dev

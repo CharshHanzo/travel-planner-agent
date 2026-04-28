@@ -15,8 +15,16 @@ export class SSEClient {
   private controller: AbortController | null = null
   private requestData: any = null
 
-  constructor(url: string) {
-    this.url = url
+  constructor(url?: string) {
+    // 使用环境变量作为默认值，允许传入自定义URL
+    // 如果环境变量为空，则使用传入的URL或默认路径
+    const baseUrl = import.meta.env.VITE_SSE_BASE_URL
+    if (baseUrl && baseUrl.trim() !== '') {
+      this.url = url || `${baseUrl}/api/v1/travel/plan-chat`
+    } else {
+      // 开发环境：使用传入的URL或默认代理路径
+      this.url = url || '/api/v1/travel/plan-chat'
+    }
   }
 
   connect(request: any, callbacks: SSECallbacks) {

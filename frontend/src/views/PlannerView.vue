@@ -65,7 +65,7 @@
       @close="error = null" 
     />
     <div v-if="loading" class="status-container">
-      <StatusFlow :visited-agents="visitedAgents" :current-agent="currentAgent" />
+      <StatusFlow :visited-agents="visitedAgents" :current-agent="currentAgent || undefined" />
     </div>
     <div v-if="result" class="result-container" ref="resultContainer">
       <MarkdownRenderer :content="result.result_markdown" />

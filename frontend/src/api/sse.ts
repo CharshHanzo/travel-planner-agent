@@ -10,10 +10,16 @@ interface SSECallbacks {
 }
 
 export async function sseRequest(
-  url: string,
+  endpoint: string,
   body: any,
   callbacks: SSECallbacks
 ): Promise<void> {
+  // 根据环境变量构建URL
+  const baseUrl = import.meta.env.VITE_SSE_BASE_URL
+  const url = baseUrl && baseUrl.trim() !== '' ? 
+    `${baseUrl}${endpoint}` : 
+    endpoint
+  
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

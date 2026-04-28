@@ -4,41 +4,41 @@ import { TravelRequest, TravelResponse } from '../types/travel'
 export const travelService = {
   // 规划旅行
   async planTravel(request: TravelRequest): Promise<TravelResponse> {
-    return apiService.post<TravelResponse>('/api/v1/travel/plan', request)
+    return apiService.post<TravelResponse>('/v1/travel/plan', request)
   },
 
   // 获取健康状态
   async getHealth(): Promise<{ status: string }> {
-    return apiService.get<{ status: string }>('/api/health')
+    return apiService.get<{ status: string }>('/health')
   },
 
   // 获取旅行计划列表
   async getPlans() {
-    return apiService.get('/api/travel/plans')
+    return apiService.get('/travel/plans')
   },
 
   // 获取单个旅行计划
   async getPlan(id: number) {
-    return apiService.get(`/api/travel/plans/${id}`)
+    return apiService.get(`/travel/plans/${id}`)
   },
 
   // 创建旅行计划
   async createPlan(data: any) {
-    return apiService.post('/api/travel/plans', data)
+    return apiService.post('/travel/plans', data)
   },
 
   // 更新旅行计划
   async updatePlan(id: number, data: any) {
-    return apiService.put(`/api/travel/plans/${id}`, data)
+    return apiService.put(`/travel/plans/${id}`, data)
   },
 
   // 删除旅行计划
   async deletePlan(id: number) {
-    return apiService.delete(`/api/travel/plans/${id}`)
+    return apiService.delete(`/travel/plans/${id}`)
   },
 
   // 生成旅行计划
   async generatePlan(data: any) {
-    return apiService.post('/api/travel/generate', data)
+    return apiService.post('/travel/generate', data)
   }
 }

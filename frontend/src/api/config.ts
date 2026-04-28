@@ -7,7 +7,7 @@ export const API_ENDPOINTS = {
   // 对话规划
   planChat: `${API_BASE}/travel/plan-chat`,
   // 健康检查
-  health: `${API_BASE}/health`,
+  health: `${API_BASE}/health/check`,
 }
 
 export default API_BASE
