@@ -79,7 +79,7 @@ load_dotenv()
 
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DASHSCOPE_MODEL = "qwen-plus-2025-07-28"
+DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "")
 TRAVEL_TOOLS_MCP_URL = "http://127.0.0.1:8000/sse"
 
 STATUS_FLOW = [

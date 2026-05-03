@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     
     # DashScope Configuration
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/api/v1"
-    DASHSCOPE_MODEL: str = "qwen-plus"
+    DASHSCOPE_MODEL: str
     
     # MCP Server Configuration
     MCP_SERVER_URL: str = "http://127.0.0.1:8000/sse"

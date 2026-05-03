@@ -39,6 +39,28 @@ onMounted(() => {
   })
 })
 
+const getMarkdownContent = (content: string): string => {
+  if (!content) return ''
+  
+  let result = content
+  
+  const contentMatch = content.match(/content=['"]([\s\S]*?)(?=\s+additional_kwargs|$)/)
+  if (contentMatch) {
+    result = contentMatch[1]
+  } else {
+    try {
+      const parsed = JSON.parse(content)
+      if (parsed.content) {
+        result = parsed.content
+      }
+    } catch (e) {
+      // Not JSON, keep original
+    }
+  }
+  
+  return result.replace(/\\n/g, '\n').replace(/\\'/g, "'").replace(/\\"/g, '"')
+}
+
 const renderedContent = computed(() => {
   console.log('MarkdownRenderer content:', props.content)
   if (!md.value) {
@@ -46,7 +68,8 @@ const renderedContent = computed(() => {
     return ''
   }
   try {
-    const result = md.value.render(props.content)
+    const markdownContent = getMarkdownContent(props.content)
+    const result = md.value.render(markdownContent)
     console.log('Rendered HTML:', result)
     return result
   } catch (err) {
@@ -82,6 +105,13 @@ const renderedContent = computed(() => {
     color: #303133;
   }
 
+  h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 14px 0 4px;
+    color: #303133;
+  }
+
   p {
     margin: 10px 0;
     line-height: 1.6;
@@ -109,7 +139,7 @@ const renderedContent = computed(() => {
   }
 
   a {
-    color: $primary-color;
+    color: #409eff;
     text-decoration: none;
 
     &:hover {
@@ -127,10 +157,10 @@ const renderedContent = computed(() => {
 
   pre {
     background-color: #f5f7fa;
-    padding: $spacing-md;
-    border-radius: $border-radius;
+    padding: 12px;
+    border-radius: 4px;
     overflow-x: auto;
-    margin: $spacing-md 0;
+    margin: 12px 0;
 
     code {
       background-color: transparent;
@@ -139,17 +169,34 @@ const renderedContent = computed(() => {
   }
 
   blockquote {
-    border-left: 4px solid $primary-color;
-    padding-left: $spacing-md;
-    margin: $spacing-md 0;
+    border-left: 4px solid #409eff;
+    padding-left: 12px;
+    margin: 12px 0;
     color: #606266;
     font-style: italic;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    
+    th, td {
+      padding: 8px 12px;
+      border: 1px solid #ebeef5;
+      text-align: left;
+    }
+    
+    th {
+      background-color: #f5f7fa;
+      font-weight: 600;
+    }
   }
 }
 
 @media (max-width: 768px) {
   .markdown-renderer {
-    padding: $spacing-md;
+    padding: 12px;
   }
 }
 </style>

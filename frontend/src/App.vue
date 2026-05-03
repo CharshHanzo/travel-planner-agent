@@ -14,6 +14,8 @@ import AppFooter from './components/layout/AppFooter.vue'
 </script>
 
 <style lang="scss">
+@import './assets/styles/variables.scss';
+
 .app-container {
   display: flex;
   flex-direction: column;
@@ -23,7 +25,7 @@ import AppFooter from './components/layout/AppFooter.vue'
 
 .app-main {
   flex: 1;
-  padding: $spacing-lg;
+  padding: 24px;
   max-width: 1200px;
   width: 100%;
   margin: 0 auto;
@@ -32,7 +34,7 @@ import AppFooter from './components/layout/AppFooter.vue'
 
 @media (max-width: 768px) {
   .app-main {
-    padding: $spacing-md;
+    padding: 16px;
   }
 }
 </style>

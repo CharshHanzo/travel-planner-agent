@@ -17,7 +17,7 @@ class Settings(BaseSettings):
         "DASHSCOPE_BASE_URL", 
         "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
-    DASHSCOPE_MODEL: str = os.getenv("DASHSCOPE_MODEL", "qwen-plus-2025-07-28")
+    DASHSCOPE_MODEL: str = os.getenv("DASHSCOPE_MODEL", "")
     
     # MCP Server 配置
     MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/sse")
