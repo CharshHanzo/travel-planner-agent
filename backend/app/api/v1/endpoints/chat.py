@@ -31,20 +31,21 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         # 发送 thinking 事件
         yield f"event: thinking\ndata: {{}}\n\n"
         
-        # 处理消息
+        # 调用 ChatSupervisor 处理消息
         response, updated_context = chat_supervisor.process_message(message, context)
         
+        # ⚠️ 关键：立即更新 sessions，确保后续消息能读到最新上下文
+        sessions[session_id] = updated_context
+        
         # 发送 message 事件
-        yield f"event: message\ndata: {{\"text\": \"{response}\"}}\n\n"
+        response_data = json.dumps({"text": response}, ensure_ascii=False)
+        yield f"event: message\ndata: {response_data}\n\n"
         
         # 发送 session 事件
         yield f"event: session\ndata: {{\"session_id\": \"{session_id}\"}}\n\n"
         
         # 发送 done 事件
         yield f"event: done\ndata: {{}}\n\n"
-        
-        # 更新会话上下文
-        sessions[session_id] = updated_context
         
     except Exception as e:
         logger.error(f"对话处理错误：{e}")

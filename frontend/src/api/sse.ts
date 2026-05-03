@@ -35,6 +35,7 @@ export async function sseRequest(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let currentEvent = ''
 
   while (true) {
     const { done, value } = await reader.read()
@@ -46,8 +47,8 @@ export async function sseRequest(
 
     for (const line of lines) {
       if (line.startsWith('event: ')) {
-        const eventType = line.slice(7).trim()
-        // 等待下一行的 data
+        // 记录当前事件类型
+        currentEvent = line.slice(7).trim()
         continue
       }
       if (line.startsWith('data: ')) {
@@ -56,27 +57,28 @@ export async function sseRequest(
         if (data) {
           try {
             const parsedData = JSON.parse(data)
-            switch (parsedData.type) {
+            // 根据 SSE event 字段判断事件类型
+            switch (currentEvent) {
               case 'thinking':
                 callbacks.onThinking?.()
                 break
               case 'agent_start':
-                callbacks.onAgentStart?.(parsedData.data?.agentName || '')
+                callbacks.onAgentStart?.(parsedData.agentName || '')
                 break
               case 'agent_end':
-                callbacks.onAgentEnd?.(parsedData.data?.agentName || '')
+                callbacks.onAgentEnd?.(parsedData.agentName || '')
                 break
               case 'message':
-                callbacks.onMessage?.(parsedData.data?.text || '')
+                callbacks.onMessage?.(parsedData.text || '')
                 break
               case 'plan':
-                callbacks.onPlan?.(parsedData.data?.markdown || '')
+                callbacks.onPlan?.(parsedData.markdown || '')
                 break
               case 'session':
-                callbacks.onSession?.(parsedData.data?.sessionId || '')
+                callbacks.onSession?.(parsedData.session_id || '')
                 break
               case 'error':
-                callbacks.onError?.(parsedData.data?.message || '')
+                callbacks.onError?.(parsedData.message || '')
                 break
               case 'done':
                 callbacks.onDone?.()

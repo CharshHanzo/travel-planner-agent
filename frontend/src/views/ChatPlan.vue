@@ -27,7 +27,9 @@
           <div v-for="(message, index) in messages" :key="index" :class="['message', message.type]">
             <div class="message-content">
               <div v-if="message.type === 'ai'" class="ai-message">
-                <div v-if="message.content" class="message-text" v-html="renderMarkdown(message.content)"></div>
+                <div v-if="message.content" class="message-text">
+                  <MarkdownRenderer :content="message.content" />
+                </div>
                 <div v-else-if="message.loading" class="message-loading">
                   <el-icon><Loading /></el-icon>
                   <span>{{ message.loading }}</span>
@@ -107,11 +109,7 @@ const generateSessionId = () => {
   return `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
 }
 
-// 渲染 Markdown
-const renderMarkdown = (content: string) => {
-  // 这里可以使用简单的 Markdown 渲染，或者使用 MarkdownRenderer 组件
-  return content
-}
+
 
 // 滚动到最新消息
 const scrollToBottom = async () => {
