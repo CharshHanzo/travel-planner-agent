@@ -9,6 +9,8 @@ FastAPI测试
 运行MCP服务器
 python travel_tools_mcp_server.py
 运行后端服务
+cd backend
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8001
 运行前端服务
+cd frontend
 npm run dev

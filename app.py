@@ -77,10 +77,41 @@ def timeout(seconds: int):
 
 load_dotenv()
 
+# LLM Provider Configuration
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "xiaomi")  # dashscope, xiaomi
+
+# DashScope Configuration
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DASHSCOPE_MODEL = os.getenv("DASHSCOPE_MODEL", "")
+
+# XIAOMI Configuration
+XIAOMI_API_KEY = os.getenv("XIAOMI_API_KEY")
+XIAOMI_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
+XIAOMI_MODEL = os.getenv("XIAOMI_MODEL", "MiMo-V2.5")
+
 TRAVEL_TOOLS_MCP_URL = "http://127.0.0.1:8000/sse"
+
+
+def create_llm_model():
+    """根据配置创建LLM模型"""
+    if LLM_PROVIDER == "dashscope":
+        return ChatOpenAI(
+            model=DASHSCOPE_MODEL,
+            api_key=DASHSCOPE_API_KEY,
+            base_url=DASHSCOPE_BASE_URL,
+            temperature=0.5,
+        )
+    elif LLM_PROVIDER == "xiaomi":
+        return ChatOpenAI(
+            model=XIAOMI_MODEL,
+            api_key=XIAOMI_API_KEY,
+            base_url=XIAOMI_BASE_URL,
+            temperature=0.5,
+        )
+    else:
+        raise ValueError(f"不支持的LLM提供商: {LLM_PROVIDER}")
+
 
 STATUS_FLOW = [
     ("TravelSupervisor", "主管正在分派任务..."),
@@ -278,12 +309,7 @@ def build_travel_graph():
         print("[WARNING] 没有加载到任何工具，将使用无工具的Agent")
 
     # 创建模型
-    model = ChatOpenAI(
-        model=DASHSCOPE_MODEL,
-        api_key=DASHSCOPE_API_KEY,
-        base_url=DASHSCOPE_BASE_URL,
-        temperature=0.5,
-    )
+    model = create_llm_model()
 
     def create_sync_wrapper(async_func, name: str, description: str, args_schema=None):
         @functools.wraps(async_func)

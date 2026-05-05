@@ -11,6 +11,9 @@ load_dotenv()
 class Settings(BaseSettings):
     """应用配置类"""
     
+    # LLM Provider Configuration
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "xiaomi")  # dashscope, xiaomi
+    
     # DashScope (通义千问) 配置
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
     DASHSCOPE_BASE_URL: str = os.getenv(
@@ -18,6 +21,14 @@ class Settings(BaseSettings):
         "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     DASHSCOPE_MODEL: str = os.getenv("DASHSCOPE_MODEL", "")
+    
+    # XIAOMI 配置
+    XIAOMI_API_KEY: str = os.getenv("XIAOMI_API_KEY", "")
+    XIAOMI_BASE_URL: str = os.getenv(
+        "XIAOMI_BASE_URL", 
+        "https://token-plan-cn.xiaomimimo.com/v1"
+    )
+    XIAOMI_MODEL: str = os.getenv("XIAOMI_MODEL", "MiMo-V2.5")
     
     # MCP Server 配置
     MCP_SERVER_URL: str = os.getenv("MCP_SERVER_URL", "http://127.0.0.1:8000/sse")
@@ -53,8 +64,14 @@ def validate_config() -> bool:
     """验证必要的配置是否存在"""
     missing = []
     
-    if not settings.DASHSCOPE_API_KEY:
-        missing.append("DASHSCOPE_API_KEY")
+    if settings.LLM_PROVIDER == "dashscope":
+        if not settings.DASHSCOPE_API_KEY:
+            missing.append("DASHSCOPE_API_KEY")
+    elif settings.LLM_PROVIDER == "xiaomi":
+        if not settings.XIAOMI_API_KEY:
+            missing.append("XIAOMI_API_KEY")
+    else:
+        raise ValueError(f"不支持的LLM提供商: {settings.LLM_PROVIDER}")
     
     if missing:
         raise ValueError(f"缺少必要的环境变量: {', '.join(missing)}")

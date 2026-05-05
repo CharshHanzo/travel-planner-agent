@@ -1,5 +1,6 @@
 import logging
 import functools
+from datetime import datetime
 
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
@@ -12,6 +13,26 @@ from app.core.config import settings
 
 # 配置日志
 logger = logging.getLogger(__name__)
+
+
+def create_llm_model():
+    """根据配置创建LLM模型"""
+    if settings.LLM_PROVIDER == "dashscope":
+        return ChatOpenAI(
+            model=settings.DASHSCOPE_MODEL,
+            api_key=settings.DASHSCOPE_API_KEY,
+            base_url=settings.DASHSCOPE_BASE_URL,
+            temperature=0.5,
+        )
+    elif settings.LLM_PROVIDER == "xiaomi":
+        return ChatOpenAI(
+            model=settings.XIAOMI_MODEL,
+            api_key=settings.XIAOMI_API_KEY,
+            base_url=settings.XIAOMI_BASE_URL,
+            temperature=0.5,
+        )
+    else:
+        raise ValueError(f"不支持的LLM提供商: {settings.LLM_PROVIDER}")
 
 @functools.lru_cache(maxsize=1)
 def build_travel_graph():
@@ -26,12 +47,7 @@ def build_travel_graph():
         logger.warning("没有加载到任何工具，将使用无工具的 Agent")
 
     # 创建模型
-    model = ChatOpenAI(
-        model=settings.DASHSCOPE_MODEL,
-        api_key=settings.DASHSCOPE_API_KEY,
-        base_url=settings.DASHSCOPE_BASE_URL,
-        temperature=0.5,
-    )
+    model = create_llm_model()
 
     # 包装所有 MCP 工具为同步工具
     sync_tools = wrap_mcp_tools(mcp_tools)
@@ -90,12 +106,7 @@ class ChatSupervisor:
         logger.info(f"加载了 {len(mcp_tools)} 个 MCP 工具")
         
         # 创建模型
-        self.model = ChatOpenAI(
-            model=settings.DASHSCOPE_MODEL,
-            api_key=settings.DASHSCOPE_API_KEY,
-            base_url=settings.DASHSCOPE_BASE_URL,
-            temperature=0.5,
-        )
+        self.model = create_llm_model()
         
         # 包装所有 MCP 工具为同步工具
         sync_tools = wrap_mcp_tools(mcp_tools)
@@ -187,16 +198,16 @@ class ChatSupervisor:
         preferences = context.get('preferences', {})
         
         prompt = f"""
-        请从用户消息中提取以下偏好信息：
+        当前年份是 {datetime.now().year} 年。请从用户消息中提取以下偏好信息：
         - budget: 预算（数字）
         - taste: 口味（辣/清淡/不挑）
-        - date: 日期（YYYY-MM-DD）
+        - date: 日期（格式 YYYY-MM-DD）。如果用户只说了月日（如"五月四日"），请补全为 {datetime.now().year}-05-04
         - people: 人数（数字）
         
         用户消息：{user_message}
         
         请返回 JSON 格式，例如：
-        {{"budget": 500, "taste": "辣", "date": "2024-05-01", "people": 2}}
+        {{"budget": 500, "taste": "辣", "date": "{datetime.now().year}-05-01", "people": 2}}
         
         如果没有提到某项，对应字段设为 null。
         """
@@ -317,8 +328,20 @@ class ChatSupervisor:
             ).content.strip()
             return response, context
         
-        # 信息齐全但还没有任何 Agent 结果 → 主动询问用户需要什么
+        # 信息齐全但还没有任何 Agent 结果
         if not context['weather'] and not context['activities'] and not context['food']:
+            # 检查用户消息是否隐含美食需求
+            food_keywords = ['口味', '清淡', '辣', '不挑', '预算', '人均', '好吃', '美食', '餐厅', '吃的', '想吃']
+            has_food_hint = any(kw in user_message for kw in food_keywords)
+            
+            if has_food_hint and prefs.get('taste') and prefs.get('budget'):
+                # 偏好齐全，直接推荐美食，不再确认
+                return self._handle_food(context)
+            elif has_food_hint:
+                # 有美食意图但偏好不全，让 _handle_food 追问
+                return self._handle_food(context)
+            
+            # 无明确需求，展示功能菜单
             response = self.model.invoke(
                 f"用户想去{context['city']}旅行，日期{prefs.get('date')}，{prefs.get('people')}人。"
                 f"用户说：{user_message}。请友好地询问用户需要什么帮助，"
@@ -390,6 +413,22 @@ class ChatSupervisor:
             return "请问您想去哪个城市？我可以帮您推荐美食。", context
         
         prefs = context.get('preferences', {})
+        
+        # 检查是否缺少关键偏好（口味和预算）
+        missing = []
+        if not prefs.get('taste'):
+            missing.append('口味偏好（比如喜欢辣的、清淡的、还是不挑）')
+        if not prefs.get('budget'):
+            missing.append('预算范围（比如人均50以内、100左右、不限）')
+        
+        if missing:
+            response = self.model.invoke(
+                f"用户想在{context['city']}找美食，但还没告诉我{'和'.join(missing)}。"
+                f"请友好地询问用户这些信息，语气自然，让用户觉得贴心。"
+            ).content.strip()
+            return response, context
+        
+        # 偏好齐全，正常调用 FoodAgent
         input_text = f"推荐 {context['city']} 的美食和餐厅"
         if prefs.get('taste') and prefs['taste'] != '不挑':
             input_text += f"，口味偏好：{prefs['taste']}"
