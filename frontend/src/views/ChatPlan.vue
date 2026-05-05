@@ -83,6 +83,8 @@ import { Loading, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
 import { sendChatMessage } from '@/api'
+import { createTrip } from '../api/history'
+import { getDeviceId } from '../utils/device'
 
 interface Message {
   type: 'user' | 'ai'
@@ -148,10 +150,60 @@ const sendMessage = async () => {
           messages.value[messages.value.length - 1] = { type: 'ai', content: text }
           scrollToBottom()
         },
-        onPlan: (markdown) => {
+        onPlan: async (markdown) => {
           // 展示计划
           messages.value[messages.value.length - 1] = { type: 'ai', content: markdown }
           scrollToBottom()
+          
+          // 保存行程
+          try {
+            // 从消息历史中提取上下文信息
+            let city = ''
+            let travelDate = ''
+            let peopleCount = 1
+            let budget = 0
+            let taste = ''
+            
+            // 简单解析：从消息历史中查找相关信息
+            for (const msg of messages.value) {
+              if (msg.content) {
+                const cityMatch = msg.content.match(/([\u4e00-\u9fa5]{2,})旅行|去([\u4e00-\u9fa5]{2,})/i)
+                if (cityMatch && !city) {
+                  city = cityMatch[1] || cityMatch[2]
+                }
+                const dateMatch = msg.content.match(/(\d{4}-\d{2}-\d{2})|(\d{1,2}月\d{1,2}日)/)
+                if (dateMatch && !travelDate) {
+                  travelDate = dateMatch[1] || dateMatch[2]
+                }
+                const peopleMatch = msg.content.match(/(\d+)人/)
+                if (peopleMatch) {
+                  peopleCount = parseInt(peopleMatch[1]) || 1
+                }
+                const budgetMatch = msg.content.match(/(\d+)元/)
+                if (budgetMatch) {
+                  budget = parseInt(budgetMatch[1]) || 0
+                }
+                const tasteMatch = msg.content.match(/(辣|清淡|不挑)/)
+                if (tasteMatch) {
+                  taste = tasteMatch[1]
+                }
+              }
+            }
+            
+            await createTrip({
+              device_id: getDeviceId(),
+              city: city || '未知城市',
+              travel_date: travelDate || new Date().toISOString().split('T')[0],
+              people_count: peopleCount,
+              budget: budget,
+              taste: taste || null,
+              plan_markdown: markdown,
+              mode: 'chat',
+            })
+            console.log('对话规划行程已保存')
+          } catch (error) {
+            console.error('保存行程失败:', error)
+          }
         },
         onSession: (id) => {
           // 保存 session_id

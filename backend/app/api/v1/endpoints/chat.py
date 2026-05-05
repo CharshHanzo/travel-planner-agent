@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
@@ -6,8 +6,12 @@ import uuid
 import logging
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
+from sqlmodel import Session
 
 from app.agents.graph import ChatSupervisor
+from app.db import get_session
+from app.services.user_service import get_or_create_user
+from app.services.trip_service import create_trip
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -21,11 +25,12 @@ sessions: Dict[str, Dict[str, Any]] = {}
 chat_supervisor = ChatSupervisor()
 
 class ChatRequest(BaseModel):
+    device_id: str = Field(..., description="设备唯一标识")
     message: str = Field(..., description="用户消息")
     session_id: Optional[str] = Field(None, description="会话ID（首次为空，后端生成返回）")
     context: Optional[Dict[str, Any]] = Field({}, description="对话上下文")
 
-async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any]):
+async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: str = None, db_session: Session = None):
     """流式返回响应"""
     try:
         # 发送 thinking 事件
@@ -37,12 +42,51 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         # ⚠️ 关键：立即更新 sessions，确保后续消息能读到最新上下文
         sessions[session_id] = updated_context
         
+        # 判断是否为计划消息
+        is_plan = response.strip().startswith("# 最终行程建议")
+        
         # 发送 message 事件
         response_data = json.dumps({"text": response}, ensure_ascii=False)
         yield f"event: message\ndata: {response_data}\n\n"
         
+        # 如果是计划，发送 plan 事件
+        if is_plan:
+            yield f"event: plan\ndata: {response_data}\n\n"
+        
         # 发送 session 事件
         yield f"event: session\ndata: {{\"session_id\": \"{session_id}\"}}\n\n"
+        
+        # 如果是生成计划且有完整上下文，保存行程
+        if is_plan and device_id and db_session:
+            try:
+                city = updated_context.get('city', '')
+                prefs = updated_context.get('preferences', {})
+                travel_date = prefs.get('date', '')
+                people_count = prefs.get('people', 1)
+                budget = prefs.get('budget', 0)
+                taste = prefs.get('taste', '')
+                
+                # 获取或创建用户
+                user = get_or_create_user(db_session, device_id)
+                
+                # 保存行程记录
+                create_trip(
+                    session=db_session,
+                    user_id=user.id,
+                    city=city,
+                    travel_date=travel_date,
+                    people_count=people_count,
+                    budget=budget,
+                    taste=taste,
+                    plan_markdown=response,
+                    weather_data=updated_context.get('weather'),
+                    activities_data=updated_context.get('activities'),
+                    food_data=updated_context.get('food'),
+                    mode="chat",
+                )
+                logger.info(f"对话规划行程已保存，用户: {user.id}, 城市: {city}")
+            except Exception as save_error:
+                logger.error(f"保存行程失败：{save_error}")
         
         # 发送 done 事件
         yield f"event: done\ndata: {{}}\n\n"
@@ -53,7 +97,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         yield f"event: done\ndata: {{}}\n\n"
 
 @router.post("/plan-chat")
-async def plan_chat(request: Request, chat_request: ChatRequest):
+async def plan_chat(request: Request, chat_request: ChatRequest, db_session: Session = Depends(get_session)):
     """对话式规划接口（SSE 流式）"""
     try:
         # 处理会话 ID
@@ -96,7 +140,7 @@ async def plan_chat(request: Request, chat_request: ChatRequest):
         
         # 返回流式响应
         return StreamingResponse(
-            stream_response(request, chat_request.message, session_id, context),
+            stream_response(request, chat_request.message, session_id, context, chat_request.device_id, db_session),
             media_type="text/event-stream"
         )
     

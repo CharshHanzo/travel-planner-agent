@@ -82,6 +82,8 @@ import ErrorAlert from '../components/common/ErrorAlert.vue'
 import { useTravelPlanner } from '../composables/useTravelPlanner'
 import { useTravelStore } from '../stores/travel'
 import { TasteType, TravelRequest } from '../types/travel'
+import { createTrip } from '../api/history'
+import { getDeviceId } from '../utils/device'
 
 const formRef = ref<any>(null)
 const resultContainer = ref<HTMLElement | null>(null)
@@ -127,8 +129,27 @@ const travelStore = useTravelStore()
 console.log('PlannerView result:', result.value)
 
 // 添加watch监听result变化
-watch(result, (newVal) => {
+watch(result, async (newVal) => {
   console.log('PlannerView result changed:', newVal)
+  if (newVal && newVal.result_markdown) {
+    try {
+      await createTrip({
+        device_id: getDeviceId(),
+        city: form.value.city,
+        travel_date: form.value.travel_date ? new Date(form.value.travel_date).toISOString().split('T')[0] : '',
+        people_count: form.value.people_count,
+        budget: form.value.budget,
+        taste: form.value.taste || null,
+        departure: form.value.departure || null,
+        activity_count: form.value.activity_count,
+        plan_markdown: newVal.result_markdown,
+        mode: 'quick',
+      })
+      console.log('快速规划行程已保存')
+    } catch (error) {
+      console.error('保存行程失败:', error)
+    }
+  }
 })
 
 const submitForm = async () => {

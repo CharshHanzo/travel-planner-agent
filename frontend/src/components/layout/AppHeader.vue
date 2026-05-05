@@ -21,7 +21,7 @@
         </router-link>
         <router-link to="/history" class="nav-item" active-class="active">
           <el-icon><Clock /></el-icon>
-          <span>历史</span>
+          <span>历史记录</span>
         </router-link>
         <router-link to="/settings" class="nav-item" active-class="active">
           <el-icon><Setting /></el-icon>
@@ -69,7 +69,7 @@
       </router-link>
       <router-link to="/history" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
         <el-icon><Clock /></el-icon>
-        <span>历史</span>
+        <span>历史记录</span>
       </router-link>
       <router-link to="/settings" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
         <el-icon><Setting /></el-icon>

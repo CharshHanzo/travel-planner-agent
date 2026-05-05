@@ -3,6 +3,7 @@ from typing import Optional, Literal
 from datetime import date, datetime
 
 class TravelRequest(BaseModel):
+    device_id: str = Field(..., description="设备唯一标识")
     city: str = Field(..., description="目的地城市")
     travel_date: date = Field(..., description="出行日期")
     people_count: int = Field(..., ge=1, le=20, description="出行人数")

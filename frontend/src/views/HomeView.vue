@@ -57,6 +57,8 @@ import { Calendar, Sunny, MapLocation, Coffee, Clock, Setting } from '@element-p
 </script>
 
 <style lang="scss">
+@use 'sass:color';
+
 .home-view {
   .hero-section {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -184,7 +186,7 @@ import { Calendar, Sunny, MapLocation, Coffee, Clock, Setting } from '@element-p
         transition: all 0.3s ease;
 
         &:hover {
-          background-color: darken($primary-color, 10%);
+          background-color: color.adjust($primary-color, $lightness: -10%);
           transform: translateY(-2px);
         }
       }
