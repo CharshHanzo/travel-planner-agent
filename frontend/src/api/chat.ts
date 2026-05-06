@@ -5,6 +5,7 @@ export interface ChatRequest {
   message: string
   session_id?: string | null
   context?: Record<string, any>
+  device_id: string
 }
 
 export interface ChatCallbacks {

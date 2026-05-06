@@ -25,10 +25,10 @@ sessions: Dict[str, Dict[str, Any]] = {}
 chat_supervisor = ChatSupervisor()
 
 class ChatRequest(BaseModel):
-    device_id: str = Field(..., description="设备唯一标识")
     message: str = Field(..., description="用户消息")
     session_id: Optional[str] = Field(None, description="会话ID（首次为空，后端生成返回）")
     context: Optional[Dict[str, Any]] = Field({}, description="对话上下文")
+    device_id: Optional[str] = Field(None, description="设备唯一标识")
 
 async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: str = None, db_session: Session = None):
     """流式返回响应"""

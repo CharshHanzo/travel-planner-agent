@@ -83,8 +83,8 @@ import { Loading, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
 import { sendChatMessage } from '@/api'
-import { createTrip } from '../api/history'
-import { getDeviceId } from '../utils/device'
+import { createTrip } from '@/api/history'
+import { getDeviceId } from '@/utils/device'
 
 interface Message {
   type: 'user' | 'ai'
@@ -140,7 +140,7 @@ const sendMessage = async () => {
   try {
     // 调用新的 sendChatMessage 方法
     await sendChatMessage(
-      { message, session_id: sessionId.value, context: {} },
+      { message, session_id: sessionId.value, context: {}, device_id: getDeviceId() },
       {
         onThinking: () => {
           // 显示思考状态
