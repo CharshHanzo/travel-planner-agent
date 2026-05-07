@@ -4,6 +4,7 @@ import asyncio
 import json
 import uuid
 import logging
+import time
 from typing import Dict, Any, Optional
 from pydantic import BaseModel, Field
 from sqlmodel import Session
@@ -11,7 +12,7 @@ from sqlmodel import Session
 from app.agents.graph import ChatSupervisor
 from app.db import get_session
 from app.services.user_service import get_or_create_user
-from app.services.trip_service import create_trip
+from app.services.trip_service import upsert_trip
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -30,14 +31,47 @@ class ChatRequest(BaseModel):
     context: Optional[Dict[str, Any]] = Field({}, description="对话上下文")
     device_id: Optional[str] = Field(None, description="设备唯一标识")
 
-async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: str = None, db_session: Session = None):
+async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: Optional[str] = None, db_session: Session = None):
     """流式返回响应"""
     try:
+        # 初始化消息列表
+        if "messages" not in context:
+            context["messages"] = []
+        
+        # 追加用户消息
+        context["messages"].append({
+            "role": "user",
+            "content": message,
+            "timestamp": int(time.time()),
+        })
+        
         # 发送 thinking 事件
         yield f"event: thinking\ndata: {{}}\n\n"
         
         # 调用 ChatSupervisor 处理消息
         response, updated_context = chat_supervisor.process_message(message, context)
+        
+        # 判断这次调用了哪些 Agent（从意图推断）
+        intent = updated_context.get("last_intent", "general")
+        agent_calls = []
+        if intent == "weather":
+            agent_calls = ["weather"]
+        elif intent == "activities":
+            agent_calls = ["activities"]
+        elif intent == "food":
+            agent_calls = ["food"]
+        elif intent == "generate_plan":
+            agent_calls = ["weather", "activities", "food"]
+        elif intent == "modify":
+            agent_calls = ["modify"]
+        
+        # 追加 AI 消息
+        updated_context["messages"].append({
+            "role": "assistant",
+            "content": response,
+            "agent_calls": agent_calls,
+            "timestamp": int(time.time()),
+        })
         
         # ⚠️ 关键：立即更新 sessions，确保后续消息能读到最新上下文
         sessions[session_id] = updated_context
@@ -56,8 +90,8 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         # 发送 session 事件
         yield f"event: session\ndata: {{\"session_id\": \"{session_id}\"}}\n\n"
         
-        # 如果是生成计划且有完整上下文，保存行程
-        if is_plan and device_id and db_session:
+        # === 宽松保存逻辑（更新消息列表到 conversation_context）===
+        if device_id and db_session:
             try:
                 city = updated_context.get('city', '')
                 prefs = updated_context.get('preferences', {})
@@ -69,22 +103,24 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                 # 获取或创建用户
                 user = get_or_create_user(db_session, device_id)
                 
-                # 保存行程记录
-                create_trip(
+                # 创建或更新行程记录
+                upsert_trip(
                     session=db_session,
                     user_id=user.id,
+                    session_id=session_id,
                     city=city,
                     travel_date=travel_date,
                     people_count=people_count,
                     budget=budget,
                     taste=taste,
-                    plan_markdown=response,
-                    weather_data=updated_context.get('weather'),
-                    activities_data=updated_context.get('activities'),
-                    food_data=updated_context.get('food'),
+                    plan_markdown=response if is_plan else None,
+                    weather_data=json.dumps(updated_context.get('weather'), ensure_ascii=False) if updated_context.get('weather') else None,
+                    activities_data=json.dumps(updated_context.get('activities'), ensure_ascii=False) if updated_context.get('activities') else None,
+                    food_data=json.dumps(updated_context.get('food'), ensure_ascii=False) if updated_context.get('food') else None,
+                    messages=updated_context.get("messages", []),  # 新增：传入消息列表
                     mode="chat",
                 )
-                logger.info(f"对话规划行程已保存，用户: {user.id}, 城市: {city}")
+                logger.info(f"对话规划行程已保存/更新，用户: {user.id}, 城市: {city}, session_id: {session_id}")
             except Exception as save_error:
                 logger.error(f"保存行程失败：{save_error}")
         

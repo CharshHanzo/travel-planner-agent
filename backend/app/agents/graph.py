@@ -278,6 +278,7 @@ class ChatSupervisor:
     
     def _route_intent(self, intent, user_message, context):
         """根据意图和上下文路由到对应处理逻辑"""
+        context['last_intent'] = intent  # 新增：记录当前意图
         
         # === 快速规划意图：generate_plan ===
         if intent == 'generate_plan':

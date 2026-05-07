@@ -1,6 +1,77 @@
 from sqlmodel import Session, select
 from app.models.trip import Trip
 from typing import Optional
+import json
+
+def get_trip_by_session(session: Session, session_id: str) -> Optional[Trip]:
+    """根据 session_id 查找行程记录"""
+    return session.exec(
+        select(Trip).where(
+            Trip.conversation_context.like(f'%"session_id": "{session_id}"%'),
+            Trip.is_deleted == False,
+        )
+    ).first()
+
+def upsert_trip(
+    session: Session,
+    user_id: str,
+    session_id: str,
+    city: Optional[str] = None,
+    travel_date: Optional[str] = None,
+    people_count: Optional[int] = None,
+    budget: Optional[int] = None,
+    taste: Optional[str] = None,
+    plan_markdown: Optional[str] = None,
+    weather_data: Optional[str] = None,
+    activities_data: Optional[str] = None,
+    food_data: Optional[str] = None,
+    messages: Optional[list] = None,
+    mode: str = "chat",
+) -> Trip:
+    """创建或更新对话模式下的行程记录"""
+    import json
+    
+    trip = get_trip_by_session(session, session_id)
+    
+    # 构建 conversation_context
+    context = {"session_id": session_id}
+    if messages:
+        context["messages"] = messages
+    
+    if trip:
+        # 更新已有记录
+        if city: trip.city = city
+        if travel_date: trip.travel_date = travel_date
+        if people_count: trip.people_count = people_count
+        if budget: trip.budget = budget
+        if taste: trip.taste = taste
+        if plan_markdown: trip.plan_markdown = plan_markdown
+        if weather_data: trip.weather_data = weather_data
+        if activities_data: trip.activities_data = activities_data
+        if food_data: trip.food_data = food_data
+        trip.conversation_context = json.dumps(context, ensure_ascii=False)
+        trip.semantic_text = generate_semantic_text(trip)
+    else:
+        trip = Trip(
+            user_id=user_id,
+            city=city or "未知",
+            travel_date=travel_date or "",
+            people_count=people_count or 1,
+            budget=budget or 0,
+            taste=taste,
+            plan_markdown=plan_markdown or "",
+            weather_data=weather_data,
+            activities_data=activities_data,
+            food_data=food_data,
+            conversation_context=json.dumps(context, ensure_ascii=False),
+            mode=mode,
+        )
+        trip.semantic_text = generate_semantic_text(trip)
+        session.add(trip)
+    
+    session.commit()
+    session.refresh(trip)
+    return trip
 
 def create_trip(session: Session, **kwargs) -> Trip:
     trip = Trip(**kwargs)

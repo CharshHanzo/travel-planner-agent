@@ -89,6 +89,16 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
     trip = get_trip(session, trip_id)
     if not trip:
         raise HTTPException(status_code=404, detail="行程不存在")
+    
+    import json
+    messages = []
+    if trip.conversation_context:
+        try:
+            ctx = json.loads(trip.conversation_context)
+            messages = ctx.get("messages", [])
+        except:
+            pass
+    
     return {
         "id": trip.id,
         "city": trip.city,
@@ -99,6 +109,7 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
         "plan_markdown": trip.plan_markdown,
         "rating": trip.rating,
         "mode": trip.mode,
+        "messages": messages,  # 新增
         "created_at": trip.created_at.isoformat(),
     }
 

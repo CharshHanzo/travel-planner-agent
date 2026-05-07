@@ -13,8 +13,16 @@ export interface TripItem {
   created_at: string
 }
 
+export interface Message {
+  role: 'user' | 'assistant'
+  content: string
+  agent_calls?: string[]
+  timestamp: number
+}
+
 export interface TripDetail extends TripItem {
   plan_markdown: string
+  messages: Message[]
 }
 
 export function fetchTrips(params: {
