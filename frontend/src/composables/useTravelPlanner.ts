@@ -3,6 +3,7 @@ import { useTravelStore } from '../stores/travel'
 import { useAgentStore } from '../stores/agent'
 import { TravelRequest } from '../types/travel'
 import { submitTravelPlan } from '../api'
+import { getDeviceId } from '../utils/device'
 
 export function useTravelPlanner() {
   const travelStore = useTravelStore()
@@ -29,7 +30,8 @@ export function useTravelPlanner() {
         budget: request.budget,
         taste: request.taste,
         departure: request.departure,
-        activity_count: request.activity_count
+        activity_count: request.activity_count,
+        device_id: getDeviceId()
       })
       travelStore.setResponse(data)
     } catch (err) {

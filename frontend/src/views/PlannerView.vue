@@ -68,22 +68,29 @@
       <StatusFlow :visited-agents="visitedAgents" :current-agent="currentAgent || undefined" />
     </div>
     <div v-if="result" class="result-container" ref="resultContainer">
+      <AmapView 
+        v-if="coordinates && coordinates.points && coordinates.points.length > 0"
+        :points="coordinates.points"
+        :route="coordinates.route"
+      />
       <MarkdownRenderer :content="result.result_markdown" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, computed } from 'vue'
 import LoadingSpinner from '../components/common/LoadingSpinner.vue'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
 import StatusFlow from '../components/common/StatusFlow.vue'
 import ErrorAlert from '../components/common/ErrorAlert.vue'
+import AmapView from '../components/map/AmapView.vue'
 import { useTravelPlanner } from '../composables/useTravelPlanner'
 import { useTravelStore } from '../stores/travel'
 import { TasteType, TravelRequest } from '../types/travel'
 import { createTrip } from '../api/history'
 import { getDeviceId } from '../utils/device'
+import { extractCoordinatesFromText } from '../utils/coordinates'
 
 const formRef = ref<any>(null)
 const resultContainer = ref<HTMLElement | null>(null)
@@ -125,6 +132,26 @@ const rules = {
 const { loading, error, result, visitedAgents, currentAgent, planTravel, reset } = useTravelPlanner()
 const travelStore = useTravelStore()
 
+// 解析坐标数据（优先使用接口返回的坐标，其次从Markdown中解析）
+const coordinates = computed(() => {
+  if (!result.value) return null
+  
+  // 优先使用后端接口直接返回的坐标
+  if (result.value.coordinates && result.value.coordinates.points && result.value.coordinates.points.length > 0) {
+    return result.value.coordinates
+  }
+  
+  // 备用方案：从Markdown中解析坐标
+  if (result.value.result_markdown) {
+    const parsedCoords = extractCoordinatesFromText(result.value.result_markdown)
+    if (parsedCoords && parsedCoords.points.length > 0) {
+      return parsedCoords
+    }
+  }
+  
+  return null
+})
+
 // 添加console.log检查result
 console.log('PlannerView result:', result.value)
 
@@ -152,15 +179,22 @@ watch(result, async (newVal) => {
   }
 })
 
+function formatDate(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const submitForm = async () => {
   if (!formRef.value) return
   
   await formRef.value.validate(async (valid: boolean) => {
     if (valid) {
-      // 格式化日期为 YYYY-MM-DD 字符串
+      // 格式化日期为 YYYY-MM-DD 字符串（使用本地时间）
       const formattedForm = {
         ...form.value,
-        travel_date: form.value.travel_date ? new Date(form.value.travel_date).toISOString().split('T')[0] : ''
+        travel_date: form.value.travel_date ? formatDate(new Date(form.value.travel_date)) : ''
       } as TravelRequest
       
       // 提交表单
@@ -261,12 +295,67 @@ const mockTravelPlan = async () => {
 
 ✅ **行程紧凑但不过满**，全天以观光+美食为主线，适合两人轻松出游。`
   
-  // 构建mock响应
+  // 构建mock响应（包含坐标数据）
   const mockResponse = {
     session_id: `session-${Date.now()}`,
     status: 'completed',
     result_markdown: mockMarkdown,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    coordinates: {
+      points: [
+        {
+          name: '广州塔',
+          lng: 113.3234,
+          lat: 23.1063,
+          type: 'activity' as const,
+          description: '中国第一高、世界第三高的旅游观光塔',
+          duration: '120分钟'
+        },
+        {
+          name: '珠江夜游',
+          lng: 113.3097,
+          lat: 23.1105,
+          type: 'activity' as const,
+          description: '欣赏珠江两岸夜景的绝佳方式',
+          duration: '90分钟'
+        },
+        {
+          name: '点都德（广州塔店）',
+          lng: 113.3225,
+          lat: 23.1058,
+          type: 'restaurant' as const,
+          cuisine: '粤菜',
+          price_per_person: 50,
+          rating: 4.5
+        },
+        {
+          name: '广州酒家（总店）',
+          lng: 113.2643,
+          lat: 23.1302,
+          type: 'restaurant' as const,
+          cuisine: '粤菜',
+          price_per_person: 60,
+          rating: 4.7
+        }
+      ],
+      route: {
+        segments: [
+          {
+            from: '广州塔',
+            to: '珠江夜游',
+            path: [
+              [113.3234, 23.1063],
+              [113.3180, 23.1080],
+              [113.3120, 23.1095],
+              [113.3100, 23.1102],
+              [113.3097, 23.1105]
+            ],
+            distance: '1500米',
+            duration: '20分钟'
+          }
+        ]
+      }
+    }
   }
   
   // 重置之前的响应

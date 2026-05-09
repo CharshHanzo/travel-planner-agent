@@ -44,6 +44,12 @@
                     <el-icon><Loading /></el-icon>
                     <span>{{ message.loading }}</span>
                   </div>
+                  <div v-if="message.coordinates && message.coordinates.points && message.coordinates.points.length > 0" class="map-section">
+                    <AmapView 
+                      :points="message.coordinates.points" 
+                      :route="message.coordinates.route" 
+                    />
+                  </div>
                 </div>
                 <div v-else class="user-message">
                   <div class="message-text">{{ message.content }}</div>
@@ -66,14 +72,14 @@
               type="textarea"
               :rows="1"
               placeholder="输入你的旅行需求..."
-              @keyup.enter.exact="sendMessage"
+              @keyup.enter.exact="sendMessage()"
               @keyup.enter.shift="$event.target.value += '\n'"
               :disabled="loading"
               class="chat-input"
             />
             <el-button 
               type="primary" 
-              @click="sendMessage" 
+              @click="sendMessage()" 
               :loading="loading"
               :disabled="!inputMessage.trim()"
               class="send-button"
@@ -95,6 +101,7 @@ import { Loading, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
 import ChatSidebar from '../components/chat/ChatSidebar.vue'
+import AmapView from '../components/map/AmapView.vue'
 import { sendChatMessage } from '@/api'
 import { getDeviceId } from '@/utils/device'
 import { deleteTrip } from '@/api/history'
@@ -105,6 +112,7 @@ interface Message {
   type: 'user' | 'ai'
   content?: string
   loading?: string
+  coordinates?: any
 }
 
 const messages = ref<Message[]>([])
@@ -168,9 +176,13 @@ const sendMessage = async (overrideMessage?: string) => {
           messages.value[messages.value.length - 1] = { type: 'ai', content: text }
           scrollToBottom()
         },
-        onPlan: async (markdown) => {
+        onPlan: async (markdown, coordinates) => {
           // 展示计划（后端已自动保存行程）
-          messages.value[messages.value.length - 1] = { type: 'ai', content: markdown }
+          messages.value[messages.value.length - 1] = { 
+            type: 'ai', 
+            content: markdown,
+            coordinates: coordinates 
+          }
           scrollToBottom()
         },
         onSession: (id) => {
@@ -368,37 +380,33 @@ html, body {
 /* 聊天页面整体布局 */
 .chat-page {
   display: flex;
-  height: calc(100vh - 108px);
-  height: calc(100dvh - 108px);
+  height: calc(100vh - 60px);
+  height: calc(100dvh - 60px);
   overflow: hidden;
   margin: 0;
   padding: 0;
-  
-  .chat-main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    background-color: #f7f7f8;
-    
-    .dark & {
-      background-color: #1e1e2e;
-    }
-  }
 }
 
 .chat-main {
-  display: flex;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   height: 100%;
   overflow: hidden;
+  background-color: #f7f7f8;
+  
+  .dark & {
+    background-color: #1e1e2e;
+  }
   
   .chat-container {
-    flex: 1;
+    flex: 0 1 auto;
     display: flex;
     flex-direction: column;
     max-width: 800px;
     width: 100%;
+    height: calc(100dvh - 60px); // 减去 header 高度
     margin: 0 auto;
     .chat-messages {
       flex: 1;
@@ -406,6 +414,7 @@ html, body {
       min-height: 0;
       display: flex;
       flex-direction: column;
+      max-height: calc(100dvh - 200px); // 减去 header(60px) + 输入框(120px) + 边距(100px)
       
       // 欢迎页
       .welcome-panel {
@@ -485,7 +494,7 @@ html, body {
         max-width: 720px;
         width: 100%;
         margin: 0 auto;
-        
+        margin-top: 20px;
         .message {
           margin-bottom: 24px;
           

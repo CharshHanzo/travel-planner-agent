@@ -15,8 +15,7 @@ class TravelRequest(BaseModel):
     @field_validator('travel_date')
     @classmethod
     def validate_travel_date(cls, v: date) -> date:
-        if v < date.today():
-            raise ValueError("出行日期不能是过去的日期")
+        # 暂时放宽：只校验日期格式，不校验是否为过去日期
         return v
     
     model_config = {
@@ -38,6 +37,7 @@ class TravelResponse(BaseModel):
     status: str = Field(..., description="状态")
     result_markdown: Optional[str] = Field(None, description="规划结果Markdown")
     created_at: datetime = Field(..., description="创建时间")
+    coordinates: Optional[dict] = Field(None, description="坐标数据")
 
 class AgentStatusEvent(BaseModel):
     agent_name: str = Field(..., description="Agent名称")

@@ -37,12 +37,24 @@ class TravelPlannerService:
             return "未生成规划结果"
         
         last_message = messages[-1]
+        
+        # 处理多种可能的消息格式
+        final_response = ""
         if isinstance(last_message, dict) and "content" in last_message:
             content = last_message["content"]
             if isinstance(content, str):
-                return content
+                final_response = content
+            else:
+                final_response = str(content)
+        elif hasattr(last_message, 'content'):
+            final_response = str(last_message.content)
+        else:
+            final_response = str(last_message)
         
-        return str(last_message)
+        # 恢复被转义的换行符（处理 AIMessage 字符串化后的转义）
+        final_response = final_response.replace('\\n', '\n').replace('\\"', '"')
+        
+        return final_response
     
     async def plan_travel_stream(self, request: TravelRequest):
         """异步生成器，yield Agent 状态事件和最终结果"""

@@ -22,6 +22,7 @@ class Trip(SQLModel, table=True):
     activities_data: Optional[str] = Field(default=None, description="ActivityAgent JSON 结果")
     food_data: Optional[str] = Field(default=None, description="FoodAgent JSON 结果")
     conversation_context: Optional[str] = Field(default=None, description="对话上下文 JSON")
+    coordinates_data: Optional[str] = Field(default=None, description="坐标数据 JSON")
     
     semantic_text: Optional[str] = Field(default=None, description="预生成的语义摘要文本")
     

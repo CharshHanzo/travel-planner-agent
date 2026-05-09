@@ -8,6 +8,7 @@ export interface TravelPlanRequest {
   taste: string
   departure?: string
   activity_count?: number
+  device_id: string
 }
 
 export function submitTravelPlan(data: TravelPlanRequest) {
@@ -19,7 +20,8 @@ export function submitTravelPlan(data: TravelPlanRequest) {
     budget: data.budget,
     taste: data.taste,
     departure: data.departure,
-    activity_count: data.activity_count
+    activity_count: data.activity_count,
+    device_id: data.device_id
   }
   
   return fetch(API_ENDPOINTS.travelPlan, {

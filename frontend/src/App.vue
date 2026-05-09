@@ -1,16 +1,22 @@
 <template>
   <div class="app-container">
     <AppHeader />
-    <main class="app-main">
+    <main v-if="!isFullscreen" class="app-main">
       <router-view />
     </main>
+    <router-view v-else />
     <!-- <AppFooter /> -->
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import AppHeader from './components/layout/AppHeader.vue'
 // import AppFooter from './components/layout/AppFooter.vue'
+
+const route = useRoute()
+const isFullscreen = computed(() => route.meta.layout === 'fullscreen')
 </script>
 
 <style lang="scss">

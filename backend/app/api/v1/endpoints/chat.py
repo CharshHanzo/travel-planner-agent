@@ -13,6 +13,7 @@ from app.agents.graph import ChatSupervisor
 from app.db import get_session
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import upsert_trip
+from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -80,13 +81,23 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         # 判断是否为计划消息
         is_plan = response.strip().startswith("# 最终行程建议")
         
-        # 发送 message 事件
-        response_data = json.dumps({"text": response}, ensure_ascii=False)
+        # 清理 Markdown（移除末尾的坐标 JSON 块）
+        cleaned_response = remove_coordinates_json(response)
+        
+        # 发送 message 事件（使用清理后的内容）
+        response_data = json.dumps({"text": cleaned_response}, ensure_ascii=False)
         yield f"event: message\ndata: {response_data}\n\n"
         
-        # 如果是计划，发送 plan 事件
+        # 如果是计划，发送 plan 事件（包含坐标数据）
         if is_plan:
-            yield f"event: plan\ndata: {response_data}\n\n"
+            coordinates = extract_coordinates(response)
+            formatted_coords = format_coordinates_for_frontend(coordinates) if coordinates else None
+            plan_data = {
+                "markdown": cleaned_response,
+                "coordinates": formatted_coords,
+            }
+            plan_data_json = json.dumps(plan_data, ensure_ascii=False)
+            yield f"event: plan\ndata: {plan_data_json}\n\n"
         
         # 发送 session 事件
         yield f"event: session\ndata: {{\"session_id\": \"{session_id}\"}}\n\n"
@@ -114,7 +125,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                     people_count=people_count,
                     budget=budget,
                     taste=taste,
-                    plan_markdown=response if is_plan else None,
+                    plan_markdown=cleaned_response if is_plan else None,
                     weather_data=json.dumps(updated_context.get('weather'), ensure_ascii=False) if updated_context.get('weather') else None,
                     activities_data=json.dumps(updated_context.get('activities'), ensure_ascii=False) if updated_context.get('activities') else None,
                     food_data=json.dumps(updated_context.get('food'), ensure_ascii=False) if updated_context.get('food') else None,

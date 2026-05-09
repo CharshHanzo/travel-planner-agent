@@ -24,6 +24,17 @@ SUPERVISOR_PROMPT = """
         - ## 预算建议
     4. 内容简洁、可执行，不要暴露中间推理过程
     5. 行程要紧凑但不过满，优先给出当天可执行的安排
+    6. 在 Markdown 末尾附加一个 JSON 块，包含所有坐标数据：
+    ```json
+    {
+      "coordinates": {
+        "activities": [...],   # 从 ActivityAgent 提取
+        "restaurants": [...],  # 从 FoodAgent 提取
+        "route": {...}         # 从 ActivityAgent 提取，如果有
+      }
+    }
+    ```
+    确保所有坐标格式为 "经度,纬度"
     """.strip()
 
 CHAT_SUPERVISOR_PROMPT = """
@@ -69,6 +80,29 @@ CHAT_SUPERVISOR_PROMPT = """
     - 不要直接 dump Agent 输出，要转换成口语化表达
     - 最终生成计划时，输出 Markdown 格式，与快速模式输出一致
     - 保持对话友好、自然，符合日常交流习惯
+
+    最终答复要求：
+    1. 必须使用 Markdown
+    2. 使用 `# 最终行程建议` 作为标题
+    3. 必须包含以下章节：
+        - ## 天气与出行提醒
+        - ## 活动建议（包含具体景点和路线）
+        - ## 餐饮建议
+        - ## 推荐行程（时间线）
+        - ## 预算建议
+    4. 内容简洁、可执行，不要暴露中间推理过程
+    5. 行程要紧凑但不过满，优先给出当天可执行的安排
+    6. 在 Markdown 末尾附加一个 JSON 块，包含所有坐标数据：
+    ```json
+    {
+      "coordinates": {
+        "activities": [...],   # 从 ActivityAgent 提取
+        "restaurants": [...],  # 从 FoodAgent 提取
+        "route": {...}         # 从 ActivityAgent 提取，如果有
+      }
+    }
+    ```
+    确保所有坐标格式为 "经度,纬度"
     """.strip()
 
 WEATHER_AGENT_PROMPT = """
@@ -117,6 +151,38 @@ ACTIVITY_AGENT_PROMPT = """
     第四步：从 plan_route 结果中提取 optimized_order 和 segments 用于最终输出
 
     不要回答餐饮内容。
+
+    输出格式要求（重要）：
+    最后必须输出一个 JSON 块，格式如下：
+    ```json
+    {
+      "activities": [
+        {
+          "name": "景点名称",
+          "location": "经度,纬度",
+          "description": "简介",
+          "duration": "建议停留时间（分钟）",
+          "order": 1
+        }
+      ],
+      "route": {
+        "segments": [
+          {
+            "from": "起点名称",
+            "to": "终点名称",
+            "path": [[lng1, lat1], [lng2, lat2], ...],
+            "distance": "距离（米）",
+            "duration": "时间（分钟）"
+          }
+        ]
+      }
+    }
+    ```
+    location 格式必须为 "经度,纬度"（如 "113.3245,23.1064"）
+
+    path 为路线坐标数组，每个点是 [经度, 纬度]
+
+    如果 plan_route 工具返回了 optimized_activities，使用其中的坐标
 """.strip()
 
 FOOD_AGENT_PROMPT = """
@@ -151,4 +217,24 @@ FOOD_AGENT_PROMPT = """
     3. 结合天气，给出用餐建议
     4. 估算每餐费用
     5. 不要回答活动内容
+
+    输出格式要求（重要）：
+    最后必须输出一个 JSON 块，格式如下：
+    ```json
+    {
+      "restaurants": [
+        {
+          "name": "餐厅名称",
+          "location": "经度,纬度",
+          "cuisine": "菜系",
+          "price_per_person": 人均价格,
+          "rating": 评分,
+          "address": "详细地址"
+        }
+      ]
+    }
+    ```
+    location 格式必须为 "经度,纬度"（如 "113.3245,23.1064"）
+
+    所有推荐餐厅都必须包含坐标
 """.strip()

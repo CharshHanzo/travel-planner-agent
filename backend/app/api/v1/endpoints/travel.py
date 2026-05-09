@@ -2,12 +2,14 @@ from fastapi import APIRouter, HTTPException, Depends
 from datetime import datetime
 import logging
 from sqlmodel import Session
+import json
 
 from app.api.v1.schemas.travel import TravelRequest, TravelResponse
 from app.services.travel_planner import TravelPlannerService
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import create_trip
 from app.db import get_session
+from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -21,7 +23,14 @@ planner_service = TravelPlannerService()
 async def plan_travel(travel_request: TravelRequest, session: Session = Depends(get_session)):
     try:
         # 执行规划
-        result_markdown = await planner_service.plan_travel(travel_request)
+        raw_result = await planner_service.plan_travel(travel_request)
+        
+        # 解析坐标数据（从原始结果中提取）
+        coordinates = extract_coordinates(raw_result)
+        
+        # 清理 Markdown（移除末尾的坐标 JSON 块）
+        result_markdown = remove_coordinates_json(raw_result)
+        formatted_coords = format_coordinates_for_frontend(coordinates) if coordinates else None
         
         # 获取或创建用户
         user = get_or_create_user(session, travel_request.device_id)
@@ -39,6 +48,7 @@ async def plan_travel(travel_request: TravelRequest, session: Session = Depends(
             activity_count=travel_request.activity_count,
             plan_markdown=result_markdown,
             mode="quick",
+            coordinates_data=json.dumps(coordinates, ensure_ascii=False) if coordinates else None,
         )
         
         # 构建响应
@@ -46,7 +56,8 @@ async def plan_travel(travel_request: TravelRequest, session: Session = Depends(
             session_id=f"session-{datetime.now().timestamp()}",
             status="completed",
             result_markdown=result_markdown,
-            created_at=datetime.now()
+            created_at=datetime.now(),
+            coordinates=formatted_coords,
         )
         
         return response

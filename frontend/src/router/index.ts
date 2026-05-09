@@ -25,7 +25,8 @@ const router = createRouter({
       name: 'plan-chat',
       component: () => import('../views/ChatPlan.vue'),
       meta: {
-        title: '对话式规划 - 智能旅行规划助手'
+        title: '对话式规划 - 智能旅行规划助手',
+        layout: 'fullscreen'
       }
     },
     {

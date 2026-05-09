@@ -54,3 +54,9 @@ tsconfig.tsbuildinfo
 # Local environment files
 .env.local
 .env.*.local
+
+# Frontend environment files
+frontend/.env
+frontend/.env.development
+frontend/.env.production
+frontend/.env.local

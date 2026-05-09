@@ -3,7 +3,7 @@ interface SSECallbacks {
   onAgentStart?: (agentName: string) => void
   onAgentEnd?: (agentName: string) => void
   onMessage?: (text: string) => void
-  onPlan?: (markdown: string) => void
+  onPlan?: (markdown: string, coordinates?: any) => void
   onSession?: (sessionId: string) => void
   onError?: (message: string) => void
   onDone?: () => void
@@ -72,7 +72,7 @@ export async function sseRequest(
                 callbacks.onMessage?.(parsedData.text || '')
                 break
               case 'plan':
-                callbacks.onPlan?.(parsedData.markdown || '')
+                callbacks.onPlan?.(parsedData.markdown || '', parsedData.coordinates)
                 break
               case 'session':
                 callbacks.onSession?.(parsedData.session_id || '')
