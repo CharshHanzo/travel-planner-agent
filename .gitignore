@@ -39,3 +39,18 @@ dist/
 build/
 
 .langgraph_api/
+
+# TypeScript compiled output
+*.js
+*.d.ts
+!*.config.js
+!vite.config.ts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
+
+# Logs
+*.log
+
+# Local environment files
+.env.local
+.env.*.local

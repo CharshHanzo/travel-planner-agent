@@ -1,77 +1,88 @@
 <template>
-  <div class="chat-plan-view">
-    <div class="chat-container">
-      <!-- 消息列表区域 -->
-      <div class="chat-messages" ref="messagesContainer">
-        <!-- 欢迎页 -->
-        <div v-if="messages.length === 0" class="welcome-panel">
-          <div class="welcome-content">
-            <div class="welcome-icon">✈️</div>
-            <h2 class="welcome-title">Hi，我是你的旅行规划助手</h2>
-            <p class="welcome-subtitle">告诉我你想去哪里，我会帮你安排一切</p>
-            <div class="welcome-suggestions">
-              <div 
-                v-for="(suggestion, index) in suggestions" 
-                :key="index" 
-                class="suggestion-card"
-                @click="handleSuggestion(suggestion)"
-              >
-                {{ suggestion }}
+  <div class="chat-page">
+    <!-- 侧边栏 -->
+    <ChatSidebar
+      :current-session-id="sessionId"
+      @new-chat="handleNewChat"
+      @select-chat="handleSelectChat"
+      @delete-chat="handleDeleteChat"
+    />
+    
+    <!-- 主内容区 -->
+    <div class="chat-main">
+      <div class="chat-container">
+        <!-- 消息列表区域 -->
+        <div class="chat-messages" ref="messagesContainer">
+          <!-- 欢迎页 -->
+          <div v-if="messages.length === 0" class="welcome-panel">
+            <div class="welcome-content">
+              <div class="welcome-icon">✈️</div>
+              <h2 class="welcome-title">Hi，我是你的旅行规划助手</h2>
+              <p class="welcome-subtitle">告诉我你想去哪里，我会帮你安排一切</p>
+              <div class="welcome-suggestions">
+                <div 
+                  v-for="(suggestion, index) in suggestions" 
+                  :key="index" 
+                  class="suggestion-card"
+                  @click="handleSuggestion(suggestion)"
+                >
+                  {{ suggestion }}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- 消息列表 -->
+          <div v-else class="messages-wrapper">
+            <div v-for="(message, index) in messages" :key="index" :class="['message', message.type]">
+              <div class="message-content">
+                <div v-if="message.type === 'ai'" class="ai-message">
+                  <div v-if="message.content" class="message-text">
+                    <MarkdownRenderer :content="message.content" />
+                  </div>
+                  <div v-else-if="message.loading" class="message-loading">
+                    <el-icon><Loading /></el-icon>
+                    <span>{{ message.loading }}</span>
+                  </div>
+                </div>
+                <div v-else class="user-message">
+                  <div class="message-text">{{ message.content }}</div>
+                </div>
+              </div>
+              <!-- 计划操作按钮 -->
+              <div v-if="message.type === 'ai' && message.content && isPlanMessage(message.content)" class="plan-actions">
+                <el-button size="small" plain @click="copyPlan(message.content)">📋 复制</el-button>
+                <el-button size="small" plain @click="exportPlan(message.content)">📥 导出</el-button>
               </div>
             </div>
           </div>
         </div>
         
-        <!-- 消息列表 -->
-        <div v-else class="messages-wrapper">
-          <div v-for="(message, index) in messages" :key="index" :class="['message', message.type]">
-            <div class="message-content">
-              <div v-if="message.type === 'ai'" class="ai-message">
-                <div v-if="message.content" class="message-text">
-                  <MarkdownRenderer :content="message.content" />
-                </div>
-                <div v-else-if="message.loading" class="message-loading">
-                  <el-icon><Loading /></el-icon>
-                  <span>{{ message.loading }}</span>
-                </div>
-              </div>
-              <div v-else class="user-message">
-                <div class="message-text">{{ message.content }}</div>
-              </div>
-            </div>
-            <!-- 计划操作按钮 -->
-            <div v-if="message.type === 'ai' && message.content && isPlanMessage(message.content)" class="plan-actions">
-              <el-button size="small" plain @click="copyPlan(message.content)">📋 复制</el-button>
-              <el-button size="small" plain @click="exportPlan(message.content)">📥 导出</el-button>
-            </div>
+        <!-- 输入框区域 -->
+        <div class="chat-input-container">
+          <div class="input-wrapper">
+            <el-input
+              v-model="inputMessage"
+              type="textarea"
+              :rows="1"
+              placeholder="输入你的旅行需求..."
+              @keyup.enter.exact="sendMessage"
+              @keyup.enter.shift="$event.target.value += '\n'"
+              :disabled="loading"
+              class="chat-input"
+            />
+            <el-button 
+              type="primary" 
+              @click="sendMessage" 
+              :loading="loading"
+              :disabled="!inputMessage.trim()"
+              class="send-button"
+            >
+              <el-icon><ArrowUp /></el-icon>
+            </el-button>
           </div>
+          <p class="input-hint">提示：可以随时修改需求，我会实时调整方案</p>
         </div>
-      </div>
-      
-      <!-- 输入框区域 -->
-      <div class="chat-input-container">
-        <div class="input-wrapper">
-          <el-input
-            v-model="inputMessage"
-            type="textarea"
-            :rows="1"
-            placeholder="输入你的旅行需求..."
-            @keyup.enter.exact="sendMessage"
-            @keyup.enter.shift="$event.target.value += '\n'"
-            :disabled="loading"
-            class="chat-input"
-          />
-          <el-button 
-            type="primary" 
-            @click="sendMessage" 
-            :loading="loading"
-            :disabled="!inputMessage.trim()"
-            class="send-button"
-          >
-            <el-icon><ArrowUp /></el-icon>
-          </el-button>
-        </div>
-        <p class="input-hint">提示：可以随时修改需求，我会实时调整方案</p>
       </div>
     </div>
   </div>
@@ -79,11 +90,16 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Loading, ArrowUp } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
+import ChatSidebar from '../components/chat/ChatSidebar.vue'
 import { sendChatMessage } from '@/api'
 import { getDeviceId } from '@/utils/device'
+import { deleteTrip } from '@/api/history'
+
+const route = useRoute()
 
 interface Message {
   type: 'user' | 'ai'
@@ -121,13 +137,16 @@ const scrollToBottom = async () => {
 }
 
 // 发送消息
-const sendMessage = async () => {
-  const message = inputMessage.value.trim()
+const sendMessage = async (overrideMessage?: string) => {
+  const message = overrideMessage || inputMessage.value.trim()
   if (!message || loading.value) return
   
   // 添加用户消息
   messages.value.push({ type: 'user', content: message })
-  inputMessage.value = ''
+  // 只有当不是使用 overrideMessage 时才清空输入框
+  if (!overrideMessage) {
+    inputMessage.value = ''
+  }
   await scrollToBottom()
   
   // 添加 AI 加载消息
@@ -216,8 +235,25 @@ const isPlanMessage = (content: string) => {
 }
 
 // 初始化
-onMounted(() => {
-  sessionId.value = generateSessionId()
+onMounted(async () => {
+  const sessionIdFromQuery = route.query.session_id as string
+  
+  if (sessionIdFromQuery) {
+    // 方案：恢复历史对话
+    await restoreSession(sessionIdFromQuery)
+  } else if (route.query.city) {
+    // 方案：用历史参数开始新对话
+    await startWithParams({
+      city: route.query.city as string,
+      date: route.query.date as string,
+      people: Number(route.query.people),
+      budget: Number(route.query.budget),
+      taste: route.query.taste as string,
+    })
+  } else {
+    // 全新对话
+    sessionId.value = generateSessionId()
+  }
   
   const textarea = document.querySelector('.chat-input textarea') as HTMLTextAreaElement | null
   if (textarea) {
@@ -233,6 +269,88 @@ onMounted(() => {
     })
   }
 })
+
+async function restoreSession(identifier: string) {
+  try {
+    const response = await fetch(`/api/v1/travel/history/sessions/${identifier}`)
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    const data = await response.json()
+    
+    // 恢复消息列表（增加空值保护）
+    const historyMessages = data.messages || []
+    messages.value = historyMessages.map((msg: any) => ({
+      type: msg.role === 'user' ? 'user' : 'ai',
+      content: msg.content,
+    }))
+    
+    // 用后端返回的 session_id 更新当前会话
+    sessionId.value = data.session_id || identifier
+    
+    scrollToBottom()
+  } catch (error) {
+    console.error('恢复会话失败:', error)
+    ElMessage.error('恢复会话失败，将开始新对话')
+    sessionId.value = generateSessionId()
+  }
+}
+
+async function startWithParams(params: { city: string; date: string; people: number; budget: number; taste: string }) {
+  // 构建首条消息
+  let initMessage = `我想去${params.city}玩`
+  if (params.date) {
+    initMessage += `，${params.date}出发`
+  }
+  if (params.people) {
+    initMessage += `，${params.people}个人`
+  }
+  if (params.budget) {
+    initMessage += `，预算${params.budget}元`
+  }
+  
+  // 初始化 session
+  sessionId.value = generateSessionId()
+  
+  // 自动发送首条消息
+  await sendMessage(initMessage)
+}
+
+function handleNewChat() {
+  // 清空状态，开始新对话
+  messages.value = []
+  sessionId.value = generateSessionId()
+  inputMessage.value = ''
+}
+
+async function handleSelectChat(sessionIdFromSidebar: string) {
+  // 加载选中的对话
+  await restoreSession(sessionIdFromSidebar)
+}
+
+async function handleDeleteChat(tripId: string) {
+  try {
+    await ElMessageBox.confirm(
+      '确定要删除这条对话记录吗？',
+      '提示',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    
+    await deleteTrip(tripId)
+    ElMessage.success('删除成功')
+    
+    // 如果删的是当前对话，开新对话
+    if (tripId === sessionId.value) {
+      handleNewChat()
+    }
+  } catch (error) {
+    // 用户取消删除
+  }
+}
 </script>
 
 <style lang="scss">
@@ -247,19 +365,33 @@ html, body {
   height: 100%;
 }
 
-.chat-plan-view {
+/* 聊天页面整体布局 */
+.chat-page {
   display: flex;
-  height: 100vh;
-  height: 100dvh; /* 兼容移动端 */
+  height: calc(100vh - 108px);
+  height: calc(100dvh - 108px);
   overflow: hidden;
   margin: 0;
   padding: 0;
-  background-color: #f7f7f8;
   
-  /* 深色模式 */
-  &.dark {
-    background-color: #1e1e2e;
+  .chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background-color: #f7f7f8;
+    
+    .dark & {
+      background-color: #1e1e2e;
+    }
   }
+}
+
+.chat-main {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
   
   .chat-container {
     flex: 1;
@@ -274,7 +406,6 @@ html, body {
       min-height: 0;
       display: flex;
       flex-direction: column;
-      max-height: calc(100vh - 200px); /* 限制最大高度，确保输入框可见 */
       
       // 欢迎页
       .welcome-panel {
@@ -586,11 +717,10 @@ html, body {
 
 // 移动端适配
 @media (max-width: 768px) {
-  .chat-plan-view {
+  .chat-main {
     .chat-container {
       .chat-messages {
         padding: 12px;
-        max-height: calc(100vh - 160px); /* 移动端调整最大高度 */
         
         .welcome-panel {
           .welcome-content {

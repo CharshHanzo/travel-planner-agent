@@ -25,7 +25,7 @@
       
       <div v-if="trip.taste && trip.taste !== '不挑'" class="info-row">
         <span class="info-tag">
-          <el-icon><SpoonFork /></el-icon>
+          <el-icon><KnifeFork /></el-icon>
           {{ trip.taste }}口味
         </span>
       </div>
@@ -59,7 +59,7 @@
 </template>
 
 <script setup lang="ts">
-import { Calendar, User, Wallet, ForkSpoon, View, Delete } from '@element-plus/icons-vue'
+import { Calendar, User, Wallet, KnifeFork, View, Delete } from '@element-plus/icons-vue'
 import type { TripItem } from '@/api/history'
 
 defineProps<{

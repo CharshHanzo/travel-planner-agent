@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import Session
+from sqlmodel import Session, select
 from typing import Optional
 from pydantic import BaseModel
 
 from app.db import get_session
+from app.models.trip import Trip
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import (
     create_trip, list_trips, get_trip, soft_delete_trip, rate_trip
@@ -92,10 +93,12 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
     
     import json
     messages = []
+    session_id = ""
     if trip.conversation_context:
         try:
             ctx = json.loads(trip.conversation_context)
             messages = ctx.get("messages", [])
+            session_id = ctx.get("session_id", "")
         except:
             pass
     
@@ -109,7 +112,8 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
         "plan_markdown": trip.plan_markdown,
         "rating": trip.rating,
         "mode": trip.mode,
-        "messages": messages,  # 新增
+        "session_id": session_id,  # 新增
+        "messages": messages,
         "created_at": trip.created_at.isoformat(),
     }
 
@@ -130,3 +134,55 @@ def rate_trip_endpoint(
     if not trip:
         raise HTTPException(status_code=404, detail="行程不存在")
     return {"message": "评分成功", "rating": trip.rating}
+
+@router.get("/history/sessions/{identifier}")
+def get_session_context(identifier: str, session: Session = Depends(get_session)):
+    """支持 session_id 或 trip_id 获取对话上下文，用于恢复对话"""
+    import json
+    
+    # 先按 session_id 查
+    trip = session.exec(
+        select(Trip).where(
+            Trip.conversation_context.like(f'%"session_id": "{identifier}"%'),
+            Trip.is_deleted == False,
+        )
+    ).first()
+    
+    # 如果没找到，按 trip_id 查
+    if not trip:
+        trip = session.exec(
+            select(Trip).where(
+                Trip.id == identifier,
+                Trip.is_deleted == False,
+            )
+        ).first()
+    
+    if not trip:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    
+    # 解析 session_id
+    session_id = ""
+    context_data = {}
+    messages = []
+    try:
+        context_data = json.loads(trip.conversation_context or "{}")
+        messages = context_data.get("messages", [])
+        session_id = context_data.get("session_id", "")
+    except:
+        pass
+    
+    return {
+        "session_id": session_id or identifier,
+        "city": trip.city,
+        "travel_date": trip.travel_date,
+        "people_count": trip.people_count,
+        "budget": trip.budget,
+        "taste": trip.taste,
+        "messages": messages,
+        "preferences": {
+            "budget": trip.budget,
+            "taste": trip.taste,
+            "date": trip.travel_date,
+            "people": trip.people_count,
+        }
+    }

@@ -1,7 +1,8 @@
 <template>
   <el-dialog 
     :title="dialogTitle" 
-    :visible.sync="visible" 
+    :model-value="props.visible" 
+    @update:model-value="$emit('update:visible', $event)" 
     width="80%" 
     max-width="900px"
     :loading="loading"
@@ -46,9 +47,13 @@
                       {{ getAgentLabel(agent) }}
                     </span>
                   </div>
+                  <!-- 时间戳 -->
+                  <div class="message-time">{{ formatTimestamp(message.timestamp) }}</div>
                 </div>
                 <div v-else class="user-message">
                   {{ message.content }}
+                  <!-- 时间戳 -->
+                  <div class="message-time">{{ formatTimestamp(message.timestamp) }}</div>
                 </div>
               </div>
             </div>
@@ -75,7 +80,27 @@
             @change="handleRating"
           />
         </div>
-        <el-button type="primary" @click="visible = false">关闭</el-button>
+        <div class="action-buttons">
+          <!-- 对话模式：继续对话 -->
+          <el-button
+            v-if="trip?.mode === 'chat'"
+            type="primary"
+            @click="handleContinueChat"
+          >
+            <el-icon><ChatDotRound /></el-icon>
+            继续对话
+          </el-button>
+          <!-- 快速模式：重新规划 -->
+          <el-button
+            v-else
+            type="primary"
+            @click="handleReplan"
+          >
+            <el-icon><Refresh /></el-icon>
+            重新规划
+          </el-button>
+          <el-button @click="$emit('update:visible', false)">关闭</el-button>
+        </div>
       </div>
     </template>
   </el-dialog>
@@ -83,10 +108,13 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
-import { User, Wallet, ForkSpoon } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { User, Wallet, ForkSpoon, ChatDotRound, Refresh } from '@element-plus/icons-vue'
 import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 import type { TripDetail as TripDetailType } from '@/api/history'
 import { fetchTripDetail, rateTrip } from '@/api/history'
+
+const router = useRouter()
 
 const props = defineProps<{
   visible: boolean
@@ -122,6 +150,27 @@ const agentLabels: Record<string, string> = {
 
 function getAgentLabel(agent: string): string {
   return agentLabels[agent] || agent
+}
+
+function formatTimestamp(timestamp: number): string {
+  const date = new Date(timestamp * 1000)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+  const days = Math.floor(diff / 86400000)
+  
+  if (minutes < 1) {
+    return '刚刚'
+  } else if (minutes < 60) {
+    return `${minutes}分钟前`
+  } else if (hours < 24) {
+    return `${hours}小时前`
+  } else if (days < 7) {
+    return `${days}天前`
+  } else {
+    return `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
+  }
 }
 
 watch(() => props.visible, async (val) => {
@@ -168,6 +217,37 @@ async function handleRating(rating: number) {
   } catch (error) {
     console.error('评分失败:', error)
   }
+}
+
+function handleContinueChat() {
+  if (!trip.value) return
+  
+  // 使用会话中的 session_id
+  const sessionId = trip.value.session_id || trip.value.id
+  
+  // 跳转到对话页面，带上 session_id
+  router.push({
+    path: '/plan-chat',
+    query: { session_id: sessionId }
+  })
+  emit('update:visible', false)
+}
+
+function handleReplan() {
+  if (!trip.value) return
+  
+  // 跳转到对话页面，带上历史参数
+  router.push({
+    path: '/plan-chat',
+    query: {
+      city: trip.value.city,
+      date: trip.value.travel_date,
+      people: trip.value.people_count,
+      budget: trip.value.budget,
+      taste: trip.value.taste || '',
+    }
+  })
+  emit('update:visible', false)
 }
 </script>
 
@@ -298,6 +378,19 @@ async function handleRating(rating: number) {
               font-size: $font-size-xs;
             }
           }
+
+          .message-time {
+            font-size: $font-size-xs;
+            color: #909399;
+            margin-top: $spacing-xs;
+            text-align: right;
+          }
+        }
+      }
+
+      &.user {
+        .message-time {
+          text-align: left;
         }
       }
     }
@@ -318,6 +411,11 @@ async function handleRating(rating: number) {
       font-size: $font-size-sm;
       color: #606266;
     }
+  }
+
+  .action-buttons {
+    display: flex;
+    gap: $spacing-sm;
   }
 }
 </style>

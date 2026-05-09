@@ -22,6 +22,7 @@ export interface Message {
 
 export interface TripDetail extends TripItem {
   plan_markdown: string
+  session_id: string
   messages: Message[]
 }
 

@@ -33,11 +33,6 @@ def upsert_trip(
     
     trip = get_trip_by_session(session, session_id)
     
-    # 构建 conversation_context
-    context = {"session_id": session_id}
-    if messages:
-        context["messages"] = messages
-    
     if trip:
         # 更新已有记录
         if city: trip.city = city
@@ -49,9 +44,22 @@ def upsert_trip(
         if weather_data: trip.weather_data = weather_data
         if activities_data: trip.activities_data = activities_data
         if food_data: trip.food_data = food_data
+        
+        # 更新会话上下文（保留原有数据）
+        context = json.loads(trip.conversation_context or "{}")
+        context["session_id"] = session_id
+        if messages is not None:
+            context["messages"] = messages
         trip.conversation_context = json.dumps(context, ensure_ascii=False)
+        
         trip.semantic_text = generate_semantic_text(trip)
     else:
+        # 创建新记录
+        # 构建 conversation_context
+        context = {"session_id": session_id}
+        if messages:
+            context["messages"] = messages
+        
         trip = Trip(
             user_id=user_id,
             city=city or "未知",

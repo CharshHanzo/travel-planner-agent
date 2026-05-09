@@ -30,6 +30,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = Field(None, description="会话ID（首次为空，后端生成返回）")
     context: Optional[Dict[str, Any]] = Field({}, description="对话上下文")
     device_id: Optional[str] = Field(None, description="设备唯一标识")
+    restore_params: Optional[Dict[str, Any]] = Field(None, description="恢复参数（用于从历史记录恢复对话）")
 
 async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: Optional[str] = None, db_session: Session = None):
     """流式返回响应"""
@@ -153,6 +154,20 @@ async def plan_chat(request: Request, chat_request: ChatRequest, db_session: Ses
                     "people": None,
                 }
             }
+            
+            # 如果传入了恢复参数，构建首条消息的上下文
+            if chat_request.restore_params:
+                restore = chat_request.restore_params
+                if restore.get("city"):
+                    context["city"] = restore["city"]
+                if restore.get("travel_date") or restore.get("date"):
+                    context["preferences"]["date"] = restore.get("travel_date") or restore.get("date")
+                if restore.get("people_count") or restore.get("people"):
+                    context["preferences"]["people"] = restore.get("people_count") or restore.get("people")
+                if restore.get("budget"):
+                    context["preferences"]["budget"] = restore["budget"]
+                if restore.get("taste"):
+                    context["preferences"]["taste"] = restore["taste"]
         else:
             # 使用现有会话 ID
             session_id = chat_request.session_id
