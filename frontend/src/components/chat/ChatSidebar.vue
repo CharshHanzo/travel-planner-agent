@@ -42,7 +42,7 @@
           <div class="item-content">
             <el-icon class="location-icon"><MapLocation /></el-icon>
             <div class="item-info" v-if="!isCollapsed">
-              <div class="item-title">{{ trip.city || '未知地点' }}</div>
+              <div class="item-title">{{ trip.city || '未命名行程' }}</div>
               <div class="item-time">{{ formatTime(trip.created_at) }}</div>
             </div>
           </div>

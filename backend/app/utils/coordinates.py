@@ -108,34 +108,50 @@ def format_coordinates_for_frontend(coords: Dict[str, Any]) -> Dict[str, Any]:
     route = coords.get("route")
     if route:
         try:
-            segments = route.get("segments", [])
-            if segments and isinstance(segments, list):
-                formatted_segments = []
-                for seg in segments:
-                    path = seg.get("path", [])
-                    formatted_path = []
-                    for p in path:
-                        try:
-                            if isinstance(p, list) and len(p) >= 2:
-                                formatted_path.append([float(p[0]), float(p[1])])
-                            elif isinstance(p, str):
-                                coords_str = p.split(",")
-                                if len(coords_str) == 2:
-                                    formatted_path.append([float(coords_str[0].strip()), float(coords_str[1].strip())])
-                        except (ValueError, AttributeError):
-                            continue
-                    
-                    formatted_segments.append({
+            # 支持两种格式：
+            # 1. segments 格式（多个路段）
+            # 2. 单一路线格式（直接有 path）
+            segments_data = route.get("segments", [])
+            
+            # 如果没有 segments，但有 path，视为单段路线
+            if not segments_data and route.get("path"):
+                segments_data = [route]
+            
+            all_segments = []
+            for seg in segments_data:
+                path = []
+                raw_path = seg.get("path", [])
+                
+                for p in raw_path:
+                    if isinstance(p, str) and "," in p:
+                        lng, lat = p.split(",")
+                        path.append([float(lng.strip()), float(lat.strip())])
+                    elif isinstance(p, list) and len(p) == 2:
+                        path.append([float(p[0]), float(p[1])])
+                    elif isinstance(p, str) and ";" in p:
+                        # 处理 polyline 格式："lng1,lat1;lng2,lat2;..."
+                        points = p.split(";")
+                        for point in points:
+                            if "," in point:
+                                lng2, lat2 = point.split(",")
+                                path.append([float(lng2.strip()), float(lat2.strip())])
+                
+                if path and len(path) >= 2:
+                    all_segments.append({
                         "from": seg.get("from", "起点"),
                         "to": seg.get("to", "终点"),
-                        "path": formatted_path,
+                        "path": path,
                         "distance": seg.get("distance", ""),
                         "duration": seg.get("duration", ""),
                     })
-                
-                if formatted_segments:
-                    result["route"] = {"segments": formatted_segments}
+            
+            if all_segments:
+                result["route"] = {"segments": all_segments}
         except (ValueError, AttributeError):
             result["route"] = None
     
+    # 注意：不再自动生成简单路线
+    # 让前端根据实际情况选择使用 AMap.DrivingRoute 或直线连线
+    # 如果没有真实路线数据（来自 MCP plan_route），route 保持为 None
+
     return result

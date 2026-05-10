@@ -558,14 +558,16 @@ class ChatSupervisor:
               }}
             ],
             "route": {{
-              "start_point": "起点名称",
-              "end_point": "终点名称",
-              "path": ["起点经度,纬度", "终点经度,纬度"]
+              "path": ["起点经度,纬度", "途经点经度,纬度", "终点经度,纬度"]
             }}
           }}
         }}
         ```
-        坐标必须从活动信息和餐饮信息中提取，不得编造。
+        location 格式必须为 "经度,纬度"（如 "113.267,23.121"）
+        
+        route.path 必须按行程顺序列出所有地点的坐标，起点到终点
+        
+        所有坐标必须从活动和餐饮信息中提取，不得编造。
         """
 
         response = self.model.invoke(prompt).content.strip()

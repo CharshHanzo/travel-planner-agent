@@ -1,7 +1,7 @@
 <template>
   <div class="trip-card">
     <div class="card-header">
-      <h3 class="city-name">{{ trip.city }}</h3>
+      <h3 class="city-name">{{ trip.city || '未命名行程' }}</h3>
       <span :class="['mode-tag', trip.mode === 'quick' ? 'mode-quick' : 'mode-chat']">
         {{ trip.mode === 'quick' ? '快速规划' : '对话规划' }}
       </span>

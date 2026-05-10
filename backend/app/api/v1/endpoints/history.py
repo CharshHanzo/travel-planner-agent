@@ -98,8 +98,23 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
     if trip.conversation_context:
         try:
             ctx = json.loads(trip.conversation_context)
-            messages = ctx.get("messages", [])
+            raw_messages = ctx.get("messages", [])
             session_id = ctx.get("session_id", "")
+            
+            # 清洗每条 AI 消息
+            for msg in raw_messages:
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    coords = extract_coordinates(content)
+                    messages.append({
+                        "role": msg.get("role"),
+                        "content": remove_coordinates_json(content),
+                        "coordinates": format_coordinates_for_frontend(coords) if coords else None,
+                        "agent_calls": msg.get("agent_calls", []),
+                        "timestamp": msg.get("timestamp", 0),
+                    })
+                else:
+                    messages.append(msg)
         except:
             pass
     
@@ -110,10 +125,10 @@ def get_trip_detail(trip_id: str, session: Session = Depends(get_session)):
         "people_count": trip.people_count,
         "budget": trip.budget,
         "taste": trip.taste,
-        "plan_markdown": trip.plan_markdown,
+        "plan_markdown": remove_coordinates_json(trip.plan_markdown or ""),
         "rating": trip.rating,
         "mode": trip.mode,
-        "session_id": session_id,  # 新增
+        "session_id": session_id,
         "messages": messages,
         "created_at": trip.created_at.isoformat(),
     }

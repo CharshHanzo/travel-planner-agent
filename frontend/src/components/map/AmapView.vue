@@ -139,33 +139,8 @@ function renderPoints() {
     markers.push(marker)
   })
   
-  if (props.route?.segments && props.route.segments.length > 0) {
-    const allPaths: any[] = []
-    props.route.segments.forEach(seg => {
-      if (seg.path && seg.path.length > 0) {
-        seg.path.forEach((p: number[]) => {
-          if (p && p.length >= 2) {
-            allPaths.push(new AMap.LngLat(p[0], p[1]))
-          }
-        })
-      }
-    })
-    
-    if (allPaths.length > 0) {
-      try {
-        polyline = new AMap.Polyline({
-          path: allPaths,
-          strokeColor: '#1677ff',
-          strokeWeight: 4,
-          strokeOpacity: 0.8,
-          showDir: true,
-        })
-        polyline.setMap(map)
-      } catch (e) {
-        console.error('路线渲染失败:', e)
-      }
-    }
-  }
+  // 改用 DrivingRoute 规划真实道路路线
+  renderRoute()
   
   const validBounds = bounds.filter(b => b && typeof b.getBounds === 'function')
   if (validBounds.length > 0) {
@@ -175,6 +150,96 @@ function renderPoints() {
       console.error('自动缩放失败:', e)
     }
   }
+}
+
+function renderRoute() {
+  if (!map || !props.points || props.points.length < 2) return
+  
+  const AMap = (window as any).AMap
+  if (!AMap) return
+  
+  // 清除旧路线
+  if (polyline) {
+    try { map.remove(polyline) } catch (e) {}
+    polyline = null
+  }
+  
+  // 检查路线是否包含真实道路数据（path 点数超过2个通常表示有真实路线）
+  const hasRealRoute = props.route?.segments && props.route.segments.some(
+    (seg: any) => seg.path && seg.path.length > 2
+  )
+  
+  // 如果有 Agent 返回的真实路线（包含 polyline 数据，path 点数 > 2），使用它
+  if (hasRealRoute) {
+    props.route?.segments?.forEach((seg: any) => {
+      if (seg.path && seg.path.length >= 2) {
+        const line = new AMap.Polyline({
+          path: seg.path.map((p: number[]) => new AMap.LngLat(p[0], p[1])),
+          strokeColor: '#1677ff',
+          strokeWeight: 5,
+          strokeOpacity: 0.8,
+          showDir: true,
+        })
+        line.setMap(map)
+      }
+    })
+    return
+  }
+  
+  // 兜底：使用 DrivingRoute 规划真实路线
+  if (AMap.DrivingRoute) {
+    const waypoints: any[] = []
+    props.points.forEach(p => {
+      waypoints.push(new AMap.LngLat(p.lng, p.lat))
+    })
+    
+    const driving = new AMap.DrivingRoute({
+      map: map,
+      policy: AMap.DrivingPolicy.LEAST_TIME,
+      showTraffic: false,
+      hideMarkers: true, // 隐藏自动生成的标记点，使用我们自己的
+    })
+    
+    driving.search(
+      waypoints[0],
+      waypoints[waypoints.length - 1],
+      { waypoints: waypoints.slice(1, -1) },
+      (status: string, result: any) => {
+        if (status !== 'complete') {
+          console.error('DrivingRoute 路线规划失败，降级为直线连线')
+          drawFallbackPolyline()
+        } else {
+          console.log('DrivingRoute 路线规划成功')
+        }
+      }
+    )
+    return
+  }
+  
+  // 最后兜底：直线连线（虚线表示非真实路线）
+  drawFallbackPolyline()
+}
+
+function drawFallbackPolyline() {
+  if (!map || !props.points || props.points.length < 2) return
+  
+  const AMap = (window as any).AMap
+  if (!AMap) return
+  
+  const pathPoints: any[] = []
+  props.points.forEach(p => {
+    pathPoints.push(new AMap.LngLat(p.lng, p.lat))
+  })
+  
+  polyline = new AMap.Polyline({
+    path: pathPoints,
+    strokeColor: '#1677ff',
+    strokeWeight: 4,
+    strokeOpacity: 0.6,
+    strokeStyle: 'dashed',  // 虚线表示非真实路线
+    showDir: true,
+  })
+  polyline.setMap(map)
 }
 
 function buildInfoContent(point: any): string {

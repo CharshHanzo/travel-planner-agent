@@ -20,6 +20,14 @@ function loadAMap() {
   script.onload = () => {
     console.log('高德地图 JS API 加载成功')
     ;(window as any).__amap_loaded__ = true
+    
+    // 额外加载 DrivingRoute 插件
+    const AMap = (window as any).AMap
+    if (AMap && !AMap.DrivingRoute) {
+      AMap.plugin(['AMap.DrivingRoute'], () => {
+        console.log('AMap.DrivingRoute 插件加载成功')
+      })
+    }
   }
   script.onerror = () => {
     console.error('高德地图 JS API 加载失败，请检查 API Key 是否有效')

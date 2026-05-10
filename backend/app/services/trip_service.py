@@ -35,7 +35,7 @@ def upsert_trip(
     
     if trip:
         # 更新已有记录
-        if city: trip.city = city
+        if city is not None: trip.city = city or "未命名行程"
         if travel_date: trip.travel_date = travel_date
         if people_count: trip.people_count = people_count
         if budget: trip.budget = budget
@@ -62,7 +62,7 @@ def upsert_trip(
         
         trip = Trip(
             user_id=user_id,
-            city=city or "未知",
+            city=city or "未命名行程",
             travel_date=travel_date or "",
             people_count=people_count or 1,
             budget=budget or 0,

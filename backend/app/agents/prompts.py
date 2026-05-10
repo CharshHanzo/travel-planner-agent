@@ -183,6 +183,11 @@ ACTIVITY_AGENT_PROMPT = """
     path 为路线坐标数组，每个点是 [经度, 纬度]
 
     如果 plan_route 工具返回了 optimized_activities，使用其中的坐标
+
+    【关键】plan_route 工具返回的每个 step 都有 polyline 字段（格式："lng1,lat1;lng2,lat2;..."），
+    你必须将所有 step 的 polyline 拼接起来，拆分坐标对，组成 path 数组。
+    例如：polyline "113.267,23.120;113.268,23.121" → path: [[113.267,23.120],[113.268,23.121]]
+    path 必须包含完整的路线坐标点，不是只包含起点和终点。
 """.strip()
 
 FOOD_AGENT_PROMPT = """
