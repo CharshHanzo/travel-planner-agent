@@ -306,15 +306,16 @@ async function restoreSession(identifier: string) {
     }
     const data = await response.json()
     
-    // 恢复消息列表（增加空值保护）
+    // 用后端返回的 session_id 更新当前会话
+    sessionId.value = data.session_id || identifier
+    
+    // 恢复消息列表（增加空值保护，直接使用后端返回的坐标）
     const historyMessages = data.messages || []
     messages.value = historyMessages.map((msg: any) => ({
       type: msg.role === 'user' ? 'user' : 'ai',
       content: msg.content,
+      coordinates: msg.coordinates || null,
     }))
-    
-    // 用后端返回的 session_id 更新当前会话
-    sessionId.value = data.session_id || identifier
     
     scrollToBottom()
   } catch (error) {

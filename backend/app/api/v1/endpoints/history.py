@@ -9,6 +9,7 @@ from app.services.user_service import get_or_create_user
 from app.services.trip_service import (
     create_trip, list_trips, get_trip, soft_delete_trip, rate_trip
 )
+from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 
 router = APIRouter()
 
@@ -171,6 +172,24 @@ def get_session_context(identifier: str, session: Session = Depends(get_session)
     except:
         pass
     
+    # 处理消息列表：提取坐标并移除 JSON 块
+    cleaned_messages = []
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            # 提取并移除坐标
+            coords = extract_coordinates(content)
+            clean_content = remove_coordinates_json(content)
+            cleaned_messages.append({
+                "role": msg.get("role"),
+                "content": clean_content,
+                "coordinates": format_coordinates_for_frontend(coords) if coords else None,
+                "agent_calls": msg.get("agent_calls", []),
+                "timestamp": msg.get("timestamp", 0),
+            })
+        else:
+            cleaned_messages.append(msg)
+    
     return {
         "session_id": session_id or identifier,
         "city": trip.city,
@@ -178,7 +197,7 @@ def get_session_context(identifier: str, session: Session = Depends(get_session)
         "people_count": trip.people_count,
         "budget": trip.budget,
         "taste": trip.taste,
-        "messages": messages,
+        "messages": cleaned_messages,
         "preferences": {
             "budget": trip.budget,
             "taste": trip.taste,

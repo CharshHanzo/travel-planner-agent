@@ -57,10 +57,16 @@ function initMap() {
     return
   }
   
+  // 根据第一个标记点确定初始中心
+  let center: [number, number] = [113.3245, 23.1064]  // 默认广州
+  if (props.points && props.points.length > 0) {
+    center = [props.points[0].lng, props.points[0].lat]
+  }
+  
   try {
     map = new AMap.Map(mapContainer.value, {
       zoom: 13,
-      center: [113.3245, 23.1064],
+      center: center,  // 动态中心
       resizeEnable: true,
     })
     

@@ -60,3 +60,9 @@ frontend/.env
 frontend/.env.development
 frontend/.env.production
 frontend/.env.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data/
