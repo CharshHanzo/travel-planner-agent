@@ -1,7 +1,10 @@
 from sqlmodel import SQLModel, Field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 import uuid
+
+# 中国时区
+CST = timezone(timedelta(hours=8))
 
 class Trip(SQLModel, table=True):
     __tablename__ = "trips"
@@ -34,5 +37,5 @@ class Trip(SQLModel, table=True):
     
     is_deleted: bool = Field(default=False, index=True, description="软删除标记")
     
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(CST), index=True)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(CST))

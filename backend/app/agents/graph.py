@@ -177,21 +177,21 @@ class ChatSupervisor:
         return intent
     
     def extract_city(self, user_message, context):
-        """从用户消息中提取城市信息"""
-        if context.get('city'):
-            return context['city']
-        
+        """从用户消息中提取城市，已有则不覆盖（除非明确指定新城市）"""
         prompt = f"""
         请从用户消息中提取目的地城市名称。
-        
         用户消息：{user_message}
-        
-        请只返回城市名称，不要返回其他内容。如果没有提到城市，请返回空字符串。
+        请只返回城市名称。如果没有提到城市，返回空字符串。
         """
         
         response = self.model.invoke(prompt)
         city = response.content.strip()
-        return city if city else None
+        
+        # 如果提取到新城市，覆盖旧值
+        if city:
+            return city
+        # 否则保留已有城市
+        return context.get('city')
     
     def extract_preferences(self, user_message, context):
         """从用户消息中提取偏好信息"""
@@ -216,11 +216,19 @@ class ChatSupervisor:
         import json
         try:
             extracted = json.loads(response.content)
-            # 更新偏好信息
             for key, value in extracted.items():
-                if value is not None:
+                # 过滤掉字符串 'None'、'null'、空字符串
+                if value is None or value == 'None' or value == 'null' or value == '':
+                    continue
+                # budget 和 people 必须转为 int
+                if key in ('budget', 'people') and value is not None:
+                    try:
+                        preferences[key] = int(value)
+                    except (ValueError, TypeError):
+                        pass  # 无法转换则跳过
+                else:
                     preferences[key] = value
-        except:
+        except json.JSONDecodeError:
             pass
         
         return preferences
@@ -451,24 +459,34 @@ class ChatSupervisor:
     
     def _handle_generate_plan(self, context):
         """生成最终旅行计划"""
-        if not context['city']:
+        # 日志：记录当前上下文信息
+        city = context.get('city', '')
+        prefs = context.get('preferences', {})
+        date = prefs.get('date', '未指定')
+        logger.info(f"生成计划 - city: '{city}', date: '{date}', prefs: {prefs}")
+        
+        if not city:
             return "请先告诉我您想去哪个城市，我才能为您生成旅行计划。", context
         
+        # 提取偏好信息
+        people = prefs.get('people', 1)
+        budget = prefs.get('budget', 0)
+        taste = prefs.get('taste', '不挑')
+        
         # 补调缺失的 Agent
-        if not context['weather']:
+        if not context.get('weather'):
             weather_result = self.weather_agent.invoke({
-                "messages": [HumanMessage(content=f"获取 {context['city']} 的天气信息")]
+                "messages": [HumanMessage(content=f"获取 {city} 的天气信息，日期为 {date}")]
             })
             weather_text = weather_result["messages"][-1].content
             context['weather'] = weather_text
         
-        if not context['activities']:
-            prefs = context.get('preferences', {})
-            input_text = f"推荐 {context['city']} 的景点和活动"
-            if prefs.get('people'):
-                input_text += f"，{prefs['people']}人出行"
-            if prefs.get('date'):
-                input_text += f"，日期 {prefs['date']}"
+        if not context.get('activities'):
+            input_text = f"推荐 {city} 的景点和活动"
+            if people:
+                input_text += f"，{people}人出行"
+            if date and date != '未指定':
+                input_text += f"，日期 {date}"
             if context.get('weather'):
                 input_text += f"，天气情况参考：{context['weather']}"
             
@@ -478,15 +496,14 @@ class ChatSupervisor:
             activity_text = activity_result["messages"][-1].content
             context['activities'] = activity_text
         
-        if not context['food']:
-            prefs = context.get('preferences', {})
-            input_text = f"推荐 {context['city']} 的美食和餐厅"
-            if prefs.get('taste') and prefs['taste'] != '不挑':
-                input_text += f"，口味偏好：{prefs['taste']}"
-            if prefs.get('budget'):
-                input_text += f"，预算：{prefs['budget']}元"
-            if prefs.get('people'):
-                input_text += f"，{prefs['people']}人用餐"
+        if not context.get('food'):
+            input_text = f"推荐 {city} 的美食和餐厅"
+            if taste and taste != '不挑':
+                input_text += f"，口味偏好：{taste}"
+            if budget:
+                input_text += f"，预算：{budget}元"
+            if people:
+                input_text += f"，{people}人用餐"
             if context.get('activities'):
                 input_text += f"，活动信息参考：{context['activities']}"
             
@@ -500,23 +517,55 @@ class ChatSupervisor:
         prompt = f"""
         请根据以下信息生成最终的旅行计划，使用 Markdown 格式：
 
-        城市：{context['city']}
-        天气信息：{context['weather']}
-        活动信息：{context['activities']}
-        餐饮信息：{context['food']}
-        偏好：{context['preferences']}
+        【关键信息 - 必须严格使用以下数据】
+        城市：{city}
+        日期：{date}
+        人数：{people}人
+        预算：{budget}元
+        口味：{taste}
+        
+        天气信息：{context.get('weather', '暂无')}
+        活动信息：{context.get('activities', '暂无')}
+        餐饮信息：{context.get('food', '暂无')}
 
         最终答复要求：
         1. 必须使用 Markdown
         2. 使用 `# 最终行程建议` 作为标题
-        3. 必须包含以下章节：
+        3. 行程必须针对【{city}】，日期为【{date}】
+        4. 必须包含以下章节：
             - ## 天气与出行提醒
             - ## 活动建议（包含具体景点和路线）
             - ## 餐饮建议
             - ## 推荐行程（时间线）
             - ## 预算建议
-        4. 内容简洁、可执行，不要暴露中间推理过程
-        5. 行程要紧凑但不过满，优先给出当天可执行的安排
+        5. 内容简洁、可执行，不要暴露中间推理过程
+        6. 行程要紧凑但不过满，优先给出当天可执行的安排
+        
+        【重要】7. 在 Markdown 末尾必须附加一个坐标 JSON 块，格式如下：
+        ```json
+        {{
+          "coordinates": {{
+            "activities": [
+              {{
+                "name": "景点名称",
+                "location": "经度,纬度"
+              }}
+            ],
+            "restaurants": [
+              {{
+                "name": "餐厅名称",
+                "location": "经度,纬度"
+              }}
+            ],
+            "route": {{
+              "start_point": "起点名称",
+              "end_point": "终点名称",
+              "path": ["起点经度,纬度", "终点经度,纬度"]
+            }}
+          }}
+        }}
+        ```
+        坐标必须从活动信息和餐饮信息中提取，不得编造。
         """
 
         response = self.model.invoke(prompt).content.strip()

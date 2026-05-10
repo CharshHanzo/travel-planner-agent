@@ -2,6 +2,7 @@
   <div class="chat-page">
     <!-- 侧边栏 -->
     <ChatSidebar
+      ref="chatSidebarRef"
       :current-session-id="sessionId"
       @new-chat="handleNewChat"
       @select-chat="handleSelectChat"
@@ -72,8 +73,8 @@
               type="textarea"
               :rows="1"
               placeholder="输入你的旅行需求..."
-              @keyup.enter.exact="sendMessage()"
-              @keyup.enter.shift="$event.target.value += '\n'"
+              @keydown.enter.exact.prevent="sendMessage()"
+              @keydown.enter.shift="handleShiftEnter"
               :disabled="loading"
               class="chat-input"
             />
@@ -96,7 +97,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Loading, ArrowUp } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
@@ -120,6 +121,7 @@ const inputMessage = ref('')
 const loading = ref(false)
 const sessionId = ref<string>('')
 const messagesContainer = ref<HTMLElement | null>(null)
+const chatSidebarRef = ref<InstanceType<typeof ChatSidebar> | null>(null)
 
 // 建议问题
 const suggestions = [
@@ -177,11 +179,12 @@ const sendMessage = async (overrideMessage?: string) => {
           scrollToBottom()
         },
         onPlan: async (markdown, coordinates) => {
-          // 展示计划（后端已自动保存行程）
-          messages.value[messages.value.length - 1] = { 
-            type: 'ai', 
-            content: markdown,
-            coordinates: coordinates 
+          console.log('onPlan 回调触发:', { markdown: markdown?.length, coordinates })
+          
+          messages.value[messages.value.length - 1] = {
+            type: 'ai',
+            content: markdown || '',
+            coordinates: coordinates || null,
           }
           scrollToBottom()
         },
@@ -206,6 +209,19 @@ const sendMessage = async (overrideMessage?: string) => {
     loading.value = false
     await scrollToBottom()
   }
+}
+
+// 处理 Shift+Enter 换行
+const handleShiftEnter = (event: KeyboardEvent) => {
+  // 手动在光标位置插入换行
+  const textarea = event.target as HTMLTextAreaElement
+  const start = textarea.selectionStart
+  const end = textarea.selectionEnd
+  inputMessage.value = inputMessage.value.substring(0, start) + '\n' + inputMessage.value.substring(end)
+  // 恢复光标位置
+  nextTick(() => {
+    textarea.selectionStart = textarea.selectionEnd = start + 1
+  })
 }
 
 // 处理建议问题
@@ -354,6 +370,9 @@ async function handleDeleteChat(tripId: string) {
     
     await deleteTrip(tripId)
     ElMessage.success('删除成功')
+    
+    // 刷新侧边栏列表
+    chatSidebarRef.value?.refresh()
     
     // 如果删的是当前对话，开新对话
     if (tripId === sessionId.value) {
@@ -542,6 +561,13 @@ html, body {
                 .el-icon {
                   animation: rotate 1s linear infinite;
                 }
+              }
+              
+              .map-section {
+                margin-top: 16px;
+                border-radius: 12px;
+                overflow: hidden;
+                box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
               }
             }
           }

@@ -80,6 +80,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         
         # 判断是否为计划消息
         is_plan = response.strip().startswith("# 最终行程建议")
+        logger.info(f"计划消息检测: is_plan={is_plan}, 响应开头: {response[:50] if response else '空'}")
         
         # 清理 Markdown（移除末尾的坐标 JSON 块）
         cleaned_response = remove_coordinates_json(response)
@@ -91,12 +92,14 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         # 如果是计划，发送 plan 事件（包含坐标数据）
         if is_plan:
             coordinates = extract_coordinates(response)
+            logger.info(f"提取坐标: {coordinates is not None}, 坐标内容: {coordinates}")
             formatted_coords = format_coordinates_for_frontend(coordinates) if coordinates else None
             plan_data = {
                 "markdown": cleaned_response,
                 "coordinates": formatted_coords,
             }
             plan_data_json = json.dumps(plan_data, ensure_ascii=False)
+            logger.info(f"发送 plan 事件: coordinates={formatted_coords is not None}")
             yield f"event: plan\ndata: {plan_data_json}\n\n"
         
         # 发送 session 事件

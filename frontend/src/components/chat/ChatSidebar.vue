@@ -88,7 +88,7 @@ import {
   List,
   Box 
 } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { fetchTrips, deleteTrip } from '@/api/history'
 import type { TripItem } from '@/api/history'
 
@@ -165,25 +165,13 @@ const handleSelectChat = (sessionId: string) => {
 }
 
 // 处理删除对话
-const handleDeleteChat = async (tripId: string) => {
-  try {
-    await ElMessageBox.confirm(
-      '确定要删除这条对话记录吗？',
-      '提示',
-      {
-        confirmButtonText: '确定',
-        cancelButtonText: '取消',
-        type: 'warning'
-      }
-    )
-    
-    await deleteTrip(tripId)
-    ElMessage.success('删除成功')
-    await loadHistory()
-    emit('delete-chat', tripId)
-  } catch (error) {
-    // 用户取消删除
-  }
+const handleDeleteChat = (tripId: string) => {
+  emit('delete-chat', tripId)
+}
+
+// 刷新历史列表
+const refreshHistory = () => {
+  loadHistory()
 }
 
 // 监听路由变化刷新列表
@@ -205,6 +193,11 @@ onUnmounted(() => {
 
 // 监听折叠状态变化
 watch(isCollapsed, saveCollapseState)
+
+// 暴露 refresh 方法
+defineExpose({
+  refresh: refreshHistory,
+})
 </script>
 
 <style lang="scss" scoped>
