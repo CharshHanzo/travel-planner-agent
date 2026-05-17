@@ -2,15 +2,24 @@ from sqlmodel import Session, select
 from app.models.trip import Trip
 from typing import Optional
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_trip_by_session(session: Session, session_id: str) -> Optional[Trip]:
     """根据 session_id 查找行程记录"""
-    return session.exec(
-        select(Trip).where(
-            Trip.conversation_context.like(f'%"session_id": "{session_id}"%'),
-            Trip.is_deleted == False,
-        )
-    ).first()
+    all_trips = session.exec(
+        select(Trip).where(Trip.is_deleted == False)
+    ).all()
+    
+    for trip in all_trips:
+        try:
+            ctx = json.loads(trip.conversation_context or "{}")
+            if ctx.get("session_id") == session_id:
+                return trip
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return None
 
 def upsert_trip(
     session: Session,
@@ -79,6 +88,7 @@ def upsert_trip(
     
     session.commit()
     session.refresh(trip)
+    
     return trip
 
 def create_trip(session: Session, **kwargs) -> Trip:

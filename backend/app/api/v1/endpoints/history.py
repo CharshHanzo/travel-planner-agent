@@ -3,13 +3,16 @@ from sqlmodel import Session, select
 from typing import Optional
 from pydantic import BaseModel
 
-from app.db import get_session
+from app.db import get_session, engine as db_engine
 from app.models.trip import Trip
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import (
     create_trip, list_trips, get_trip, soft_delete_trip, rate_trip
 )
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -149,6 +152,15 @@ def rate_trip_endpoint(
     trip = rate_trip(session, trip_id, request.rating)
     if not trip:
         raise HTTPException(status_code=404, detail="行程不存在")
+    
+    try:
+        with Session(db_engine) as learning_session:
+            from app.services.learning_engine import LearningEngine
+            engine = LearningEngine(learning_session)
+            engine.update_user_preferences(trip.user_id)
+    except Exception as e:
+        logger.error(f"更新用户偏好失败: {e}")
+    
     return {"message": "评分成功", "rating": trip.rating}
 
 @router.get("/history/sessions/{identifier}")

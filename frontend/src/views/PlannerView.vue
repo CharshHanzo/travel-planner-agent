@@ -79,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, nextTick, watch, computed } from 'vue'
+import { ref, nextTick, watch, computed, onMounted } from 'vue'
 import LoadingSpinner from '../components/common/LoadingSpinner.vue'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
 import StatusFlow from '../components/common/StatusFlow.vue'
@@ -89,8 +89,10 @@ import { useTravelPlanner } from '../composables/useTravelPlanner'
 import { useTravelStore } from '../stores/travel'
 import { TasteType, TravelRequest } from '../types/travel'
 import { createTrip } from '../api/history'
+import { fetchUserPreferences } from '../api/user'
 import { getDeviceId } from '../utils/device'
 import { extractCoordinatesFromText } from '../utils/coordinates'
+import { ElMessage } from 'element-plus'
 
 const formRef = ref<any>(null)
 const resultContainer = ref<HTMLElement | null>(null)
@@ -132,6 +134,29 @@ const rules = {
 const { loading, error, result, visitedAgents, currentAgent, planTravel, reset } = useTravelPlanner()
 const travelStore = useTravelStore()
 
+onMounted(async () => {
+  try {
+    const pref = await fetchUserPreferences()
+    if (pref.sufficient && pref.preferences) {
+      if (pref.preferences.taste) {
+        form.value.taste = pref.preferences.taste.value
+      }
+      if (pref.preferences.budget) {
+        form.value.budget = pref.preferences.budget.value
+      }
+      if (pref.preferences.departure) {
+        form.value.departure = pref.preferences.departure.value
+      }
+      if (pref.preferences.people_count) {
+        form.value.people_count = pref.preferences.people_count.value
+      }
+      ElMessage.success({ message: '已根据您的历史偏好自动填充表单', duration: 1200 })
+    }
+  } catch (error) {
+    console.error('获取偏好失败:', error)
+  }
+})
+
 // 解析坐标数据（优先使用接口返回的坐标，其次从Markdown中解析）
 const coordinates = computed(() => {
   if (!result.value) return null
@@ -152,30 +177,12 @@ const coordinates = computed(() => {
   return null
 })
 
-// 添加console.log检查result
-console.log('PlannerView result:', result.value)
+// 后端 plan 接口已自动保存行程，无需前端重复保存
 
-// 添加watch监听result变化
+// 监听结果变化（用于其他用途如更新 UI）
 watch(result, async (newVal) => {
-  console.log('PlannerView result changed:', newVal)
   if (newVal && newVal.result_markdown) {
-    try {
-      await createTrip({
-        device_id: getDeviceId(),
-        city: form.value.city,
-        travel_date: form.value.travel_date ? new Date(form.value.travel_date).toISOString().split('T')[0] : '',
-        people_count: form.value.people_count,
-        budget: form.value.budget,
-        taste: form.value.taste || null,
-        departure: form.value.departure || null,
-        activity_count: form.value.activity_count,
-        plan_markdown: newVal.result_markdown,
-        mode: 'quick',
-      })
-      console.log('快速规划行程已保存')
-    } catch (error) {
-      console.error('保存行程失败:', error)
-    }
+    console.log('快速规划结果已生成')
   }
 })
 

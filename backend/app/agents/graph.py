@@ -1,6 +1,6 @@
 import logging
 import functools
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from langgraph.prebuilt import create_react_agent
 from langgraph_supervisor import create_supervisor
@@ -30,6 +30,11 @@ def create_llm_model():
             api_key=settings.XIAOMI_API_KEY,
             base_url=settings.XIAOMI_BASE_URL,
             temperature=0.5,
+            extra_body={
+                "chat_template_kwargs": {
+                    "enable_thinking": False
+                }
+            },
         )
     else:
         raise ValueError(f"不支持的LLM提供商: {settings.LLM_PROVIDER}")
@@ -196,18 +201,25 @@ class ChatSupervisor:
     def extract_preferences(self, user_message, context):
         """从用户消息中提取偏好信息"""
         preferences = context.get('preferences', {})
+        today = datetime.now().strftime("%Y-%m-%d")
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
         prompt = f"""
-        当前年份是 {datetime.now().year} 年。请从用户消息中提取以下偏好信息：
+        当前日期是 {today}，明天是 {tomorrow}。请从用户消息中提取以下偏好信息：
+        - date: 日期（YYYY-MM-DD格式）
+          - "今天" = {today}
+          - "明天" = {tomorrow}
+          - "后天" = {(datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")}
+          - "五月四日" → {datetime.now().year}-05-04
+          - "下周三" → 需要根据今天的星期几推算
         - budget: 预算（数字）
         - taste: 口味（辣/清淡/不挑）
-        - date: 日期（格式 YYYY-MM-DD）。如果用户只说了月日（如"五月四日"），请补全为 {datetime.now().year}-05-04
         - people: 人数（数字）
         
         用户消息：{user_message}
         
         请返回 JSON 格式，例如：
-        {{"budget": 500, "taste": "辣", "date": "{datetime.now().year}-05-01", "people": 2}}
+        {{"date": "{tomorrow}", "budget": 500, "taste": "辣", "people": 2}}
         
         如果没有提到某项，对应字段设为 null。
         """
@@ -322,9 +334,31 @@ class ChatSupervisor:
             ).content.strip()
             return response, context
         
+        # 检查是否从学习引擎注入了偏好
+        prefs = context.get('preferences', {})
+        prefs_from_learning = context.get('preferences_injected', False)
+        
+        # 如果偏好已注入且信息齐全（日期、人数都有），直接展示功能菜单
+        if prefs_from_learning and prefs.get('date') and prefs.get('people'):
+            preference_hints = []
+            if prefs.get('taste'):
+                preference_hints.append(f"口味偏好：{prefs['taste']}")
+            if prefs.get('budget'):
+                preference_hints.append(f"预算：{prefs['budget']}元")
+            
+            hint_text = ""
+            if preference_hints:
+                hint_text = f"（根据您的历史偏好：{', '.join(preference_hints)}）"
+            
+            response = self.model.invoke(
+                f"用户想去{context['city']}旅行{hint_text}，日期{prefs.get('date')}，{prefs.get('people')}人。"
+                f"用户说：{user_message}。请友好地询问用户需要什么帮助，"
+                f"可以提示：查看天气、推荐景点活动、推荐美食、或直接生成旅行计划。"
+            ).content.strip()
+            return response, context
+        
         # 如果城市已有但缺少关键偏好（日期、人数），引导用户补充
         missing = []
-        prefs = context.get('preferences', {})
         if not prefs.get('date'):
             missing.append('出发日期')
         if not prefs.get('people'):

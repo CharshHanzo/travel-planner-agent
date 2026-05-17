@@ -10,6 +10,8 @@ export const API_ENDPOINTS = {
   health: `${API_BASE}/health/check`,
   // 历史记录
   historyTrips: `${API_BASE}/travel/history/trips`,
+  // 用户偏好
+  userPreferences: `${API_BASE}/travel/user/preferences`,
 }
 
 export default API_BASE

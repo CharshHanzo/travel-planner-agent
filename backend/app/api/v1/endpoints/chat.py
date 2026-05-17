@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session
 
 from app.agents.graph import ChatSupervisor
-from app.db import get_session
+from app.db import get_session, engine
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import upsert_trip
+from app.services.learning_engine import LearningEngine
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 
 # 配置日志
@@ -36,6 +37,29 @@ class ChatRequest(BaseModel):
 async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: Optional[str] = None, db_session: Session = None):
     """流式返回响应"""
     try:
+        # 首次处理时注入偏好
+        if "preferences_injected" not in context:
+            try:
+                with Session(engine) as pref_session:
+                    user = get_or_create_user(pref_session, device_id)
+                    pref_engine = LearningEngine(pref_session)
+                    cached = pref_engine.get_cached_preferences(user.id)
+                    if cached.get("sufficient"):
+                        prefs = cached.get("preferences", {})
+                        if prefs.get("taste"):
+                            context["preferences"]["taste"] = prefs["taste"]["value"]
+                        if prefs.get("budget"):
+                            context["preferences"]["budget"] = prefs["budget"]["value"]
+                        if prefs.get("departure"):
+                            context["departure"] = prefs["departure"]["value"]
+                        if prefs.get("people_count"):
+                            context["preferences"]["people"] = prefs["people_count"]["value"]
+                
+                context["preferences_injected"] = True
+            except Exception as e:
+                logger.error(f"注入偏好失败: {e}")
+                context["preferences_injected"] = True
+        
         # 初始化消息列表
         if "messages" not in context:
             context["messages"] = []

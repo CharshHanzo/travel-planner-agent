@@ -8,8 +8,9 @@ from app.api.v1.schemas.travel import TravelRequest, TravelResponse
 from app.services.travel_planner import TravelPlannerService
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import create_trip
-from app.db import get_session
+from app.db import get_session, engine as db_engine
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
+from app.services.learning_engine import LearningEngine
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -22,6 +23,8 @@ planner_service = TravelPlannerService()
 @router.post("/plan", response_model=TravelResponse)
 async def plan_travel(travel_request: TravelRequest, session: Session = Depends(get_session)):
     try:
+        logger.error("【DEBUG】plan_travel 被调用")
+        
         # 执行规划
         raw_result = await planner_service.plan_travel(travel_request)
         
@@ -50,6 +53,15 @@ async def plan_travel(travel_request: TravelRequest, session: Session = Depends(
             mode="quick",
             coordinates_data=json.dumps(coordinates, ensure_ascii=False) if coordinates else None,
         )
+        logger.error(f"【DEBUG】create_trip 完成，trip_id={trip.id}")
+        
+        # 触发学习更新（用独立 session，不影响主流程）
+        try:
+            with Session(db_engine) as learning_session:
+                engine = LearningEngine(learning_session)
+                engine.update_user_preferences(user.id)
+        except Exception as e:
+            logger.error(f"更新用户偏好失败: {e}")
         
         # 构建响应
         response = TravelResponse(
