@@ -24,8 +24,13 @@ router = APIRouter()
 # 会话存储
 sessions: Dict[str, Dict[str, Any]] = {}
 
-# ChatSupervisor 实例
+# ChatSupervisor 模块级实例
 chat_supervisor = ChatSupervisor()
+
+def get_chat_supervisor():
+    if not chat_supervisor._initialized:
+        raise HTTPException(status_code=503, detail="服务正在初始化，请稍后重试")
+    return chat_supervisor
 
 class ChatRequest(BaseModel):
     message: str = Field(..., description="用户消息")
@@ -75,7 +80,8 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         yield f"event: thinking\ndata: {{}}\n\n"
         
         # 调用 ChatSupervisor 处理消息
-        response, updated_context = chat_supervisor.process_message(message, context)
+        supervisor = get_chat_supervisor()
+        response, updated_context = supervisor.process_message(message, context)
         
         # 判断这次调用了哪些 Agent（从意图推断）
         intent = updated_context.get("last_intent", "general")

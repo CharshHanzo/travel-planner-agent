@@ -39,6 +39,20 @@
         <el-form-item label="出发地点">
           <el-input v-model="form.departure" placeholder="请输入出发地点（可选）" />
         </el-form-item>
+        <el-form-item label="活动数据源">
+          <el-select v-model="form.activity_source" placeholder="选择活动数据源">
+            <el-option label="小红书（推荐）" value="xiaohongshu" />
+            <el-option label="马蜂窝" value="mafengwo" />
+            <el-option label="携程" value="ctrip" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="美食数据源">
+          <el-select v-model="form.food_source" placeholder="选择美食数据源">
+            <el-option label="美团（推荐）" value="meituan" />
+            <el-option label="大众点评" value="dianping" />
+            <el-option label="小红书" value="xiaohongshu" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="活动数量" prop="activity_count">
           <el-slider 
             v-model="form.activity_count" 
@@ -104,7 +118,9 @@ const form = ref({
   budget: 0,
   taste: '' as TasteType,
   departure: '',
-  activity_count: 1
+  activity_count: 1,
+  activity_source: 'xiaohongshu',
+  food_source: 'meituan'
 })
 
 const rules = {
@@ -150,7 +166,7 @@ onMounted(async () => {
       if (pref.preferences.people_count) {
         form.value.people_count = pref.preferences.people_count.value
       }
-      ElMessage.success({ message: '已根据您的历史偏好自动填充表单', duration: 1200 })
+      ElMessage.success({ message: '已根据您的历史偏好自动填充表单', duration: 1900 })
     }
   } catch (error) {
     console.error('获取偏好失败:', error)

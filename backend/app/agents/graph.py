@@ -8,7 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 
 from app.agents.tools import get_mcp_tools, wrap_mcp_tools, run_async
-from app.agents.prompts import SUPERVISOR_PROMPT, CHAT_SUPERVISOR_PROMPT, WEATHER_AGENT_PROMPT, ACTIVITY_AGENT_PROMPT, FOOD_AGENT_PROMPT
+from app.agents.prompts import SUPERVISOR_PROMPT, CHAT_SUPERVISOR_PROMPT, WEATHER_AGENT_PROMPT, ACTIVITY_AGENT_PROMPT, FOOD_AGENT_PROMPT, ROUTE_AGENT_PROMPT
 from app.core.config import settings
 
 # 配置日志
@@ -67,7 +67,7 @@ def build_travel_graph():
     )
     
     # 创建 ActivityAgent
-    activity_tools = [t for t in sync_tools if t.name in ['search_activities', 'plan_route']]
+    activity_tools = [t for t in sync_tools if t.name == 'search_activities']
     activity_agent = create_react_agent(
         model=model,
         tools=activity_tools,
@@ -76,22 +76,26 @@ def build_travel_graph():
     )
     
     # 创建 FoodAgent
-    food_tools = [t for t in sync_tools if t.name in [
-        'search_restaurants',
-        'recommend_meal_plan',
-        'get_restaurant_detail',
-        'recommend_by_cuisine'
-    ]]
+    food_tools = [t for t in sync_tools if t.name == 'search_restaurants']
     food_agent = create_react_agent(
         model=model,
         tools=food_tools,
         name="FoodAgent",
         prompt=FOOD_AGENT_PROMPT,
     )
+    
+    # 创建 RouteAgent
+    route_tools = [t for t in sync_tools if t.name == 'plan_route']
+    route_agent = create_react_agent(
+        model=model,
+        tools=route_tools,
+        name="RouteAgent",
+        prompt=ROUTE_AGENT_PROMPT,
+    )
 
     # 创建 Supervisor
     workflow = create_supervisor(
-        [weather_agent, activity_agent, food_agent],
+        [weather_agent, activity_agent, food_agent, route_agent],
         model=model,
         prompt=SUPERVISOR_PROMPT,
         output_mode="last_message",
@@ -99,24 +103,30 @@ def build_travel_graph():
         supervisor_name="TravelSupervisor",
     )
     
-    return workflow.compile(name="travel_planner_supervisor")
+    return workflow.compile(
+        name="travel_planner_supervisor",
+        recursion_limit=30,
+    )
 
 class ChatSupervisor:
     """对话式规划主管"""
     
     def __init__(self):
-        """初始化 ChatSupervisor"""
-        # 获取 MCP 工具
-        mcp_tools = run_async(get_mcp_tools())
-        logger.info(f"加载了 {len(mcp_tools)} 个 MCP 工具")
-        
-        # 创建模型
+        """初始化 ChatSupervisor（不加载 MCP 工具）"""
         self.model = create_llm_model()
+        self._initialized = False
+        self.weather_agent = None
+        self.activity_agent = None
+        self.food_agent = None
+        self.route_agent = None
+    
+    def initialize(self, sync_tools):
+        """真正的初始化，传入已加载的工具"""
+        if self._initialized:
+            return
         
-        # 包装所有 MCP 工具为同步工具
-        sync_tools = wrap_mcp_tools(mcp_tools)
+        logger.info(f"开始初始化 ChatSupervisor，工具数量: {len(sync_tools)}")
         
-        # 创建 WeatherAgent
         weather_tools = [t for t in sync_tools if t.name == 'get_weather']
         self.weather_agent = create_react_agent(
             model=self.model,
@@ -124,29 +134,40 @@ class ChatSupervisor:
             name="WeatherAgent",
             prompt=WEATHER_AGENT_PROMPT,
         )
+        logger.info(f"WeatherAgent 初始化完成，工具数量: {len(weather_tools)}")
         
-        # 创建 ActivityAgent
-        activity_tools = [t for t in sync_tools if t.name in ['search_activities', 'plan_route']]
+        activity_tools = [t for t in sync_tools if t.name == 'search_activities']
         self.activity_agent = create_react_agent(
             model=self.model,
             tools=activity_tools,
             name="ActivityAgent",
             prompt=ACTIVITY_AGENT_PROMPT,
         )
+        logger.info(f"ActivityAgent 初始化完成，工具数量: {len(activity_tools)}")
         
-        # 创建 FoodAgent
-        food_tools = [t for t in sync_tools if t.name in [
-            'search_restaurants',
-            'recommend_meal_plan',
-            'get_restaurant_detail',
-            'recommend_by_cuisine'
-        ]]
+        food_tools = [t for t in sync_tools if t.name == 'search_restaurants']
         self.food_agent = create_react_agent(
             model=self.model,
             tools=food_tools,
             name="FoodAgent",
             prompt=FOOD_AGENT_PROMPT,
         )
+        logger.info(f"FoodAgent 初始化完成，工具数量: {len(food_tools)}")
+        
+        route_tools = [t for t in sync_tools if t.name == 'plan_route']
+        if route_tools:
+            self.route_agent = create_react_agent(
+                model=self.model,
+                tools=route_tools,
+                name="RouteAgent",
+                prompt=ROUTE_AGENT_PROMPT,
+            )
+            logger.info(f"RouteAgent 初始化完成，工具数量: {len(route_tools)}")
+        else:
+            logger.warning("RouteAgent 未找到 plan_route 工具，跳过初始化")
+        
+        self._initialized = True
+        logger.info("ChatSupervisor 初始化完成")
     
     def identify_intent(self, user_message):
         """识别用户意图"""

@@ -11,11 +11,26 @@ class TravelRequest(BaseModel):
     taste: Literal["辣", "清淡", "不挑"] = Field(..., description="口味偏好")
     departure: Optional[str] = Field(None, description="出发地")
     activity_count: int = Field(3, ge=1, le=5, description="每天活动数量")
+    activity_source: str = Field("xiaohongshu", description="活动数据源")
+    food_source: str = Field("meituan", description="美食数据源")
     
     @field_validator('travel_date')
     @classmethod
     def validate_travel_date(cls, v: date) -> date:
-        # 暂时放宽：只校验日期格式，不校验是否为过去日期
+        return v
+    
+    @field_validator('activity_source')
+    @classmethod
+    def validate_activity_source(cls, v: str) -> str:
+        if v not in ["xiaohongshu", "mafengwo", "ctrip"]:
+            return "xiaohongshu"
+        return v
+    
+    @field_validator('food_source')
+    @classmethod
+    def validate_food_source(cls, v: str) -> str:
+        if v not in ["meituan", "dianping", "xiaohongshu"]:
+            return "meituan"
         return v
     
     model_config = {
@@ -27,7 +42,9 @@ class TravelRequest(BaseModel):
                 "budget": 5000,
                 "taste": "不挑",
                 "departure": "北京",
-                "activity_count": 3
+                "activity_count": 3,
+                "activity_source": "xiaohongshu",
+                "food_source": "meituan"
             }
         }
     }

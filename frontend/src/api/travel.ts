@@ -8,11 +8,12 @@ export interface TravelPlanRequest {
   taste: string
   departure?: string
   activity_count?: number
+  activity_source?: string
+  food_source?: string
   device_id: string
 }
 
 export function submitTravelPlan(data: TravelPlanRequest) {
-  // 转换字段名以匹配后端API
   const requestData = {
     city: data.city,
     travel_date: data.date,
@@ -21,6 +22,8 @@ export function submitTravelPlan(data: TravelPlanRequest) {
     taste: data.taste,
     departure: data.departure,
     activity_count: data.activity_count,
+    activity_source: data.activity_source || 'xiaohongshu',
+    food_source: data.food_source || 'meituan',
     device_id: data.device_id
   }
   

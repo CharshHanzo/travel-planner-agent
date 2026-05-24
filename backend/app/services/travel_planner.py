@@ -84,7 +84,6 @@ class TravelPlannerService:
         """构建用户消息"""
         departure_text = request.departure.strip() if request.departure else "未提供"
         
-        # 计算相对日期
         today = date.today()
         delta = (request.travel_date - today).days
         if delta == 0:
@@ -107,10 +106,13 @@ class TravelPlannerService:
 - 口味偏好：{request.taste}
 - 出发地点：{departure_text}
 - 推荐活动数量：{request.activity_count}
+- 活动数据源：{request.activity_source}（默认小红书）
+- 美食数据源：{request.food_source}（默认美团）
 
 ⚠️ 重要：
-- 如果出发地点不为空，ActivityAgent 在调用 plan_route 时必须将其作为 start_point 参数传入
+- 如果出发地点不为空，RouteAgent 在调用 plan_route 时必须将其作为 start_point 参数传入
 - ActivityAgent 搜索活动时请使用 limit={request.activity_count}
+- 各 Agent 按以下顺序执行：WeatherAgent → ActivityAgent → FoodAgent → RouteAgent
 
 要求：
 1. 结果必须使用 Markdown

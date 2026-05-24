@@ -315,150 +315,201 @@ def get_mock_activities(city: str, keyword: str, limit: int) -> dict:
 
 # Activity Agent 工具函数
 @mcp.tool()
-async def search_activities(city: str, keyword: str = "景点", limit: int = 10) -> dict:
-    """搜索目的地的景点、活动、节庆等"""
+async def search_activities(
+    city: str,
+    keyword: str = "",
+    source: str = "xiaohongshu",
+    weather_context: str = "",
+    limit: int = 5
+) -> str:
+    """
+    搜索目的地景点活动，通过 Firecrawl 从指定平台抓取。
+    
+    Args:
+        city: 城市名称
+        keyword: 搜索关键词
+        source: 数据源（xiaohongshu/mafengwo/ctrip）
+        weather_context: 天气上下文（如"雨天"、"晴天30度"）
+        limit: 返回结果数量
+    """
     logger.info(f"[Tool:search_activities] ========== 开始执行 ==========")
-    logger.info(f"[Tool:search_activities] 参数: city={city}, keyword={keyword}, limit={limit}")
+    logger.info(f"[Tool:search_activities] 参数: city={city}, keyword={keyword}, source={source}, limit={limit}")
     
     try:
-        # 使用高德地图 API 作为主要搜索源
-        if AMAP_API_KEY:
-            logger.info(f"[Tool:search_activities] 使用高德地图 API 搜索")
-            async with httpx.AsyncClient() as client:
-                params = {
-                    "key": AMAP_API_KEY,
-                    "keywords": f"{city} {keyword}",
-                    "types": "110000",
-                    "city": city,
-                    "offset": limit,
-                    "extensions": "all"
-                }
-                
-                response = await client.get(
-                    "https://restapi.amap.com/v3/place/text",
-                    params=params
-                )
-                
-                logger.info(f"[Tool:search_activities] 高德 API 响应状态: {response.status_code}")
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get("status") == "1":
-                        pois = data.get("pois", [])
-                        logger.info(f"[Tool:search_activities] 找到 {len(pois)} 个结果")
-                        
-                        activities = []
-                        for poi in pois[:limit]:
-                            activity = {
-                                "name": poi.get("name"),
-                                "description": poi.get("type", "暂无描述"),
-                                "location_hint": poi.get("address", ""),
-                                "location": poi.get("location"),
-                                "tel": poi.get("tel", ""),
-                                "source": "高德地图"
-                            }
-                            activities.append(activity)
-                            logger.debug(f"[Tool:search_activities] 活动: {activity['name']}")
-                        
-                        result = {
-                            "city": city,
-                            "keyword": keyword,
-                            "count": len(activities),
-                            "activities": activities,
-                            "source": "高德地图"
-                        }
-                        
-                        logger.info(f"[Tool:search_activities] 执行成功，返回 {len(activities)} 个活动")
-                        logger.info(f"[Tool:search_activities] ========== 执行完成 ==========")
-                        return result
+        search_keyword = f"{city} {keyword} 旅游攻略 景点推荐"
+        if weather_context:
+            if any(w in weather_context for w in ["雨", "雪"]):
+                search_keyword += " 室内 雨天"
+            elif any(w in weather_context for w in ["热", "高温"]):
+                search_keyword += " 避暑 室内"
         
-        # 如果没有 API Key 或搜索失败，返回模拟数据
-        logger.warning(f"[Tool:search_activities] 使用模拟数据")
-        result = get_mock_activities(city, keyword, limit)
-        logger.info(f"[Tool:search_activities] 返回模拟数据，共 {result['count']} 个")
-        logger.info(f"[Tool:search_activities] ========== 执行完成 ==========")
-        return result
-        
-    except Exception as e:
-        error_result = {
-            "error": f"搜索失败: {str(e)}",
-            "city": city,
-            "keyword": keyword,
-            "count": 0,
-            "activities": []
+        source_urls = {
+            "xiaohongshu": f"https://www.xiaohongshu.com/search_result?keyword={search_keyword}&type=51",
+            "mafengwo": f"https://www.mafengwo.cn/search/q.php?q={search_keyword}",
+            "ctrip": f"https://you.ctrip.com/searchsite/?query={search_keyword}",
         }
+        search_url = source_urls.get(source, source_urls["xiaohongshu"])
+        
+        logger.info(f"[Tool:search_activities] 搜索 URL: {search_url}")
+        
+        if not FIRECRAWL_API_KEY:
+            logger.warning("[Tool:search_activities] 未配置 Firecrawl API Key")
+            result = get_mock_activities(city, keyword, limit)
+            return json.dumps(result, ensure_ascii=False)
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{FIRECRAWL_BASE_URL}/scrape",
+                headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
+                json={"url": search_url, "formats": ["markdown"], "onlyMainContent": True}
+            )
+            
+            logger.info(f"[Tool:search_activities] Firecrawl 响应状态: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.warning(f"[Tool:search_activities] Firecrawl 请求失败，使用模拟数据")
+                result = get_mock_activities(city, keyword, limit)
+                return json.dumps(result, ensure_ascii=False)
+            
+            data = response.json()
+            content = data.get("data", {}).get("markdown", "")
+            
+            if not content:
+                logger.warning("[Tool:search_activities] Firecrawl 返回内容为空，使用模拟数据")
+                result = get_mock_activities(city, keyword, limit)
+                return json.dumps(result, ensure_ascii=False)
+            
+            activities = _parse_activities_from_markdown(content, limit)
+            
+            if not activities:
+                logger.warning("[Tool:search_activities] 解析结果为空")
+                return json.dumps({
+                    "activities": [],
+                    "source": source,
+                    "city": city,
+                    "error": f"Firecrawl 成功抓取 {source}，但未能解析出活动信息。建议：1) 调整搜索关键词 2) 尝试其他数据源",
+                    "raw_preview": content[:300] if content else ""
+                }, ensure_ascii=False)
+            
+            logger.info(f"[Tool:search_activities] 执行成功，返回 {len(activities)} 个活动")
+            logger.info(f"[Tool:search_activities] ========== 执行完成 ==========")
+            
+            return json.dumps({
+                "activities": activities,
+                "source": source,
+                "city": city,
+            }, ensure_ascii=False)
+            
+    except Exception as e:
         logger.error(f"[Tool:search_activities] 异常: {e}", exc_info=True)
-        return error_result
+        result = get_mock_activities(city, keyword, limit)
+        return json.dumps(result, ensure_ascii=False)
 
 @mcp.tool()
-async def plan_route(activities: list, start_point: str = None) -> dict:
-    """规划多个活动的游览顺序"""
+async def plan_route(activities: Any, start_point: str = "") -> str:
+    """
+    规划多个活动的游览顺序和路径。
+    
+    Args:
+        activities: 活动列表，支持多种格式：
+            - JSON 字符串: '[{"name":"越秀公园","location":"113.265,23.140"}, ...]'
+            - Python 列表: [{"name":"越秀公园","location":"113.265,23.140"}, ...]
+        start_point: 起点名称或坐标
+    """
     logger.info(f"[Tool:plan_route] ========== 开始执行 ==========")
+    
+    if isinstance(activities, str):
+        try:
+            activities = json.loads(activities)
+        except json.JSONDecodeError:
+            error_result = {"error": "activities 参数格式错误，需要 JSON 数组"}
+            logger.error(f"[Tool:plan_route] {error_result['error']}")
+            return json.dumps(error_result, ensure_ascii=False)
+    
+    if not isinstance(activities, list):
+        error_result = {"error": "activities 必须是列表"}
+        logger.error(f"[Tool:plan_route] {error_result['error']}")
+        return json.dumps(error_result, ensure_ascii=False)
+    
+    if len(activities) == 0:
+        error_result = {"error": "activities 不能为空"}
+        logger.error(f"[Tool:plan_route] {error_result['error']}")
+        return json.dumps(error_result, ensure_ascii=False)
+    
     logger.info(f"[Tool:plan_route] 活动数量: {len(activities)}, 起点: {start_point}")
     
-    try:
-        if len(activities) < 2:
-            result = {
-                "error": "至少需要2个活动才能规划路线",
-                "optimized_order": [act.get("name", "未知") for act in activities]
-            }
-            logger.warning(f"[Tool:plan_route] {result['error']}")
-            return result
+    parsed_activities = []
+    for i, act in enumerate(activities):
+        if isinstance(act, str):
+            logger.warning(f"[Tool:plan_route] 活动 {i+1} 是字符串，尝试解析: {act}")
+            try:
+                act = json.loads(act)
+            except:
+                logger.warning(f"[Tool:plan_route] 无法解析活动 {i+1}: {act}")
+                continue
         
+        if isinstance(act, dict):
+            parsed_activities.append(act)
+        else:
+            logger.warning(f"[Tool:plan_route] 跳过无效活动 {i+1}: {type(act)}")
+    
+    if len(parsed_activities) == 0:
+        error_result = {"error": "没有有效的活动"}
+        logger.error(f"[Tool:plan_route] {error_result['error']}")
+        return json.dumps(error_result, ensure_ascii=False)
+    
+    locations = []
+    for act in parsed_activities:
+        location = act.get("location", "")
+        name = act.get("name", "未知")
+        
+        if not location:
+            logger.warning(f"[Tool:plan_route] 缺少位置信息: {name}")
+            continue
+        
+        if isinstance(location, str) and "," in location:
+            try:
+                lng, lat = location.split(",")
+                locations.append({
+                    "name": name,
+                    "lng": float(lng.strip()),
+                    "lat": float(lat.strip()),
+                    "original": act
+                })
+            except ValueError:
+                logger.warning(f"[Tool:plan_route] 坐标格式错误: {location}")
+        elif isinstance(location, list) and len(location) == 2:
+            try:
+                locations.append({
+                    "name": name,
+                    "lng": float(location[0]),
+                    "lat": float(location[1]),
+                    "original": act
+                })
+            except ValueError:
+                logger.warning(f"[Tool:plan_route] 坐标格式错误: {location}")
+    
+    if len(locations) < 2:
+        missing = [a.get("name", "未知") for a in parsed_activities if not a.get("location")]
+        error_result = {"error": f"有效坐标不足（需要至少2个），无法规划路线。缺少坐标的活动：{missing}"}
+        logger.error(f"[Tool:plan_route] {error_result['error']}")
+        return json.dumps(error_result, ensure_ascii=False)
+    
+    try:
         if not AMAP_API_KEY:
-            result = {
+            error_result = {
                 "error": "未配置高德地图 API Key，无法计算路线",
-                "optimized_order": [act.get("name", "未知") for act in activities],
                 "note": "💡 提示：配置高德地图 API Key 可获得真实路线规划"
             }
-            logger.warning(f"[Tool:plan_route] {result['error']}")
-            return result
+            logger.warning(f"[Tool:plan_route] {error_result['error']}")
+            return json.dumps(error_result, ensure_ascii=False)
         
-        # 1. 获取所有活动的坐标
-        coords = []
-        names = []
-        failed = []
+        coords = [f"{loc['lng']},{loc['lat']}" for loc in locations]
+        names = [loc['name'] for loc in locations]
+        acts_with_coords = [loc['original'] for loc in locations]
         
-        for idx, act in enumerate(activities):
-            name = act.get("name", f"活动{idx+1}")
-            loc = act.get("location", "")
-            names.append(name)
-            
-            logger.info(f"[Tool:plan_route] 处理活动 {idx+1}/{len(activities)}: {name}")
-            logger.info(f"[Tool:plan_route] 位置信息: {loc}")
-            
-            # 判断是坐标还是地址
-            if loc and "," in loc and len(loc.split(",")) == 2:
-                # 已经是坐标格式
-                coords.append(loc)
-                logger.info(f"[Tool:plan_route] 直接使用坐标: {loc}")
-            elif loc:
-                # 需要地理编码
-                logger.info(f"[Tool:plan_route] 地址转坐标: {loc}")
-                coord = await _geocode(loc)
-                if coord:
-                    coords.append(coord)
-                    logger.info(f"[Tool:plan_route] 编码成功: {loc} -> {coord}")
-                else:
-                    logger.warning(f"[Tool:plan_route] 编码失败: {name} - {loc}")
-                    failed.append(name)
-                    coords.append(None)
-            else:
-                logger.warning(f"[Tool:plan_route] 缺少位置信息: {name}")
-                failed.append(name)
-                coords.append(None)
+        logger.info(f"[Tool:plan_route] 有坐标的活动: {names}")
         
-        if failed:
-            error_result = {
-                "error": f"无法定位以下活动：{', '.join(failed)}",
-                "optimized_order": names,
-                "note": "请为这些活动提供更详细的位置信息"
-            }
-            logger.error(f"[Tool:plan_route] {error_result['error']}")
-            return error_result
-        
-        # 2. 计算距离矩阵（使用高德地图驾车路径规划API）
-        logger.info("[Tool:plan_route] 开始计算距离矩阵...")
         n = len(coords)
         dist_matrix = [[0] * n for _ in range(n)]
         time_matrix = [[0] * n for _ in range(n)]
@@ -466,13 +517,12 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
         async with httpx.AsyncClient() as client:
             for i in range(n):
                 for j in range(i + 1, n):
-                    # 使用驾车路径规划 API 代替距离测量 API
                     params = {
                         "key": AMAP_API_KEY,
                         "origin": coords[i],
                         "destination": coords[j],
-                        "extensions": "base",  # base 返回基本信息，包括距离和时间
-                        "strategy": 0  # 0: 最快路线
+                        "extensions": "base",
+                        "strategy": 0
                     }
                     
                     url = f"{AMAP_BASE_URL}/direction/driving"
@@ -483,16 +533,13 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
                         
                         if response.status_code == 200:
                             data = response.json()
-                            logger.info(f"[Tool:plan_route] 高德 API 原始响应: {json.dumps(data, ensure_ascii=False)}")
                             
                             if data.get("status") == "1" and data.get("route", {}).get("paths"):
                                 path = data["route"]["paths"][0]
                                 
-                                # 获取距离（米）
                                 distance_m = int(path.get("distance", 0))
                                 dist_km = round(distance_m / 1000, 1)
                                 
-                                # 获取时间（秒）
                                 duration_s = int(path.get("duration", 0))
                                 duration_min = round(duration_s / 60, 1)
                                 
@@ -503,17 +550,15 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
                                 
                                 logger.info(f"[Tool:plan_route] 距离: {dist_km}km, 时间: {duration_min}分钟")
                             else:
-                                logger.warning(f"[Tool:plan_route] 路径规划失败: {data.get('info', '未知错误')}, 使用估算")
-                                # 使用直线距离估算
+                                logger.warning(f"[Tool:plan_route] 路径规划失败，使用估算")
                                 dist_km = estimate_distance(coords[i], coords[j])
-                                duration_min = dist_km * 2  # 估算时间
+                                duration_min = dist_km * 2
                                 dist_matrix[i][j] = dist_km
                                 dist_matrix[j][i] = dist_km
                                 time_matrix[i][j] = duration_min
                                 time_matrix[j][i] = duration_min
                         else:
                             logger.warning(f"[Tool:plan_route] API请求失败: {response.status_code}")
-                            # 使用估算距离
                             dist_km = estimate_distance(coords[i], coords[j])
                             duration_min = dist_km * 2
                             dist_matrix[i][j] = dist_km
@@ -529,32 +574,24 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
                         time_matrix[i][j] = duration_min
                         time_matrix[j][i] = duration_min
         
-        # 3. 打印距离矩阵（调试用）
         logger.info("[Tool:plan_route] 距离矩阵:")
         for i in range(n):
             row = [f"{dist_matrix[i][j]:.1f}" for j in range(n)]
             logger.info(f"  {names[i]}: {', '.join(row)}km")
         
-        # 4. 使用贪心算法求最优顺序（TSP问题近似解）
         logger.info("[Tool:plan_route] 确定起始点...")
         
+        start_idx = 0
         if start_point:
-            # 有起点：计算各点到起点的距离
             logger.info(f"[Tool:plan_route] 计算到起点的距离: {start_point}")
             distances_to_start = []
             for coord in coords:
                 dist = await get_distance_to_point(start_point, coord, AMAP_API_KEY)
                 distances_to_start.append(dist)
             
-            # 找到离起点最近的活动
             start_idx = distances_to_start.index(min(distances_to_start))
-            logger.info(f"[Tool:plan_route] 起点最近的活动: {names[start_idx]} (距离: {min(distances_to_start)}km)")
-        else:
-            # 没有起点：从第一个活动开始
-            start_idx = 0
-            logger.info("[Tool:plan_route] 未指定起点，从第一个活动开始")
+            logger.info(f"[Tool:plan_route] 起点最近的活动: {names[start_idx]}")
         
-        # 贪心算法：每次选择最近的下一个点
         unvisited = set(range(n))
         unvisited.remove(start_idx)
         order = [start_idx]
@@ -563,10 +600,8 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
         total_time = 0
         
         logger.info(f"[Tool:plan_route] 开始贪心路径规划...")
-        logger.info(f"[Tool:plan_route] 起始点: {names[current]}")
         
         while unvisited:
-            # 找到未访问中距离当前点最近的点
             next_idx = min(unvisited, key=lambda x: dist_matrix[current][x])
             distance = dist_matrix[current][next_idx]
             travel_time = time_matrix[current][next_idx]
@@ -580,7 +615,6 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
             unvisited.remove(next_idx)
             current = next_idx
         
-        # 5. 构建分段详情
         segments = []
         for i in range(len(order) - 1):
             frm, to = order[i], order[i + 1]
@@ -592,10 +626,8 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
                 "duration_text": format_duration(time_matrix[frm][to])
             })
         
-        # 6. 构建优化后的活动列表
-        optimized_activities = [activities[idx] for idx in order]
+        optimized_activities = [acts_with_coords[idx] for idx in order]
         
-        # 7. 生成建议
         suggestion = ""
         if total_time > 0:
             if total_time < 60:
@@ -623,12 +655,120 @@ async def plan_route(activities: list, start_point: str = None) -> dict:
         logger.info(f"[Tool:plan_route] 优化顺序: {' -> '.join([names[idx] for idx in order])}")
         logger.info(f"[Tool:plan_route] ========== 执行完成 ==========")
         
-        return result
+        return json.dumps(result, ensure_ascii=False)
         
     except Exception as e:
         error_msg = f"路线规划失败: {str(e)}"
         logger.error(f"[Tool:plan_route] {error_msg}", exc_info=True)
-        return {"error": error_msg}
+        return json.dumps({"error": error_msg}, ensure_ascii=False)
+
+def _parse_activities_from_markdown(content: str, limit: int) -> list:
+    """从 Firecrawl 返回的 Markdown 中提取活动/景点列表"""
+    activities = []
+    
+    if not content or len(content) < 50:
+        return activities
+    
+    lines = content.split("\n")
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        if line.startswith(("1.", "2.", "3.", "4.", "5.", "-", "•", "*")):
+            clean = line.lstrip("0123456789.-•* ").strip()
+            if len(clean) > 5:
+                activities.append({
+                    "name": clean[:80],
+                    "description": clean[:200],
+                })
+        
+        elif "|" in line and not line.startswith("|---"):
+            parts = [p.strip() for p in line.split("|") if p.strip()]
+            if len(parts) >= 1:
+                name = parts[0]
+                if len(name) > 3:
+                    activities.append({
+                        "name": name[:80],
+                        "description": " ".join(parts[1:])[:200] if len(parts) > 1 else "",
+                    })
+        
+        elif "**" in line:
+            clean = line.replace("**", "").strip()
+            if len(clean) > 3 and not clean.startswith("#"):
+                activities.append({
+                    "name": clean[:80],
+                    "description": clean[:200],
+                })
+        
+        if len(activities) >= limit:
+            break
+    
+    if len(activities) == 0 and content:
+        activities.append({
+            "name": "搜索结果（原始数据）",
+            "description": content[:500],
+        })
+    
+    return activities[:limit]
+
+
+def _parse_restaurants_from_markdown(content: str, budget: int, limit: int) -> list:
+    """从 Firecrawl 返回的 Markdown 中提取餐厅列表"""
+    restaurants = []
+    
+    if not content or len(content) < 50:
+        return restaurants
+    
+    lines = content.split("\n")
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        if line.startswith(("1.", "2.", "3.", "4.", "5.", "-", "•", "*")):
+            clean = line.lstrip("0123456789.-•* ").strip()
+            if len(clean) > 5:
+                restaurants.append({
+                    "name": clean[:80],
+                    "description": clean[:200],
+                    "estimated_price": budget if budget > 0 else 0,
+                })
+        
+        elif "|" in line and not line.startswith("|---"):
+            parts = [p.strip() for p in line.split("|") if p.strip()]
+            if len(parts) >= 1:
+                name = parts[0]
+                if len(name) > 3:
+                    restaurants.append({
+                        "name": name[:80],
+                        "description": " ".join(parts[1:])[:200] if len(parts) > 1 else "",
+                        "estimated_price": budget if budget > 0 else 0,
+                    })
+        
+        elif "**" in line:
+            clean = line.replace("**", "").strip()
+            if len(clean) > 3 and not clean.startswith("#"):
+                restaurants.append({
+                    "name": clean[:80],
+                    "description": clean[:200],
+                    "estimated_price": budget if budget > 0 else 0,
+                })
+        
+        if len(restaurants) >= limit:
+            break
+    
+    if len(restaurants) == 0 and content:
+        restaurants.append({
+            "name": "搜索结果（原始数据）",
+            "description": content[:500],
+            "estimated_price": budget if budget > 0 else 0,
+        })
+    
+    return restaurants[:limit]
+
 
 def estimate_distance(coord1: str, coord2: str) -> float:
     """估算两个坐标之间的直线距离（公里）- 使用Haversine公式"""
@@ -691,110 +831,112 @@ def format_duration(minutes: float) -> str:
 @mcp.tool()
 async def search_restaurants(
     city: str,
-    location: Optional[str] = None,
-    keyword: str = "美食",
-    budget: Optional[int] = None,
-    taste: Optional[str] = None,
-    limit: int = 10
-) -> dict:
-    """搜索餐厅"""
+    location: str = "",
+    keyword: str = "",
+    budget: int = 0,
+    taste: str = "",
+    source: str = "meituan",
+    weather_context: str = "",
+    limit: int = 5
+) -> str:
+    """
+    搜索餐厅美食，通过 Firecrawl 从指定平台抓取。
+    
+    Args:
+        city: 城市名称
+        location: 位置（如"北京路附近"）
+        keyword: 美食关键词
+        budget: 人均预算
+        taste: 口味偏好（辣/清淡/不挑）
+        source: 数据源（meituan/dianping/xiaohongshu）
+        weather_context: 天气上下文
+        limit: 返回数量
+    """
     logger.info(f"[Tool:search_restaurants] ========== 开始执行 ==========")
-    logger.info(f"[Tool:search_restaurants] 参数: city={city}, keyword={keyword}, budget={budget}, taste={taste}, limit={limit}")
+    logger.info(f"[Tool:search_restaurants] 参数: city={city}, source={source}, limit={limit}")
     
     try:
-        if not AMAP_API_KEY:
-            logger.warning("[Tool:search_restaurants] 未配置高德 API Key")
-            return {
-                "error": "未配置高德地图 API Key",
-                "note": "💡 提示：请在高德地图开放平台申请 API Key"
-            }
+        search_keyword = f"{city} {location} "
+        if taste and taste != "不挑":
+            search_keyword += f"{taste}口味 "
+        if keyword:
+            search_keyword += keyword
+        else:
+            search_keyword += "美食"
         
-        # 如果提供了 taste，将其添加到关键词中
-        search_keyword = keyword
-        if taste:
-            search_keyword = f"{taste} {keyword}"
+        if weather_context:
+            if any(w in weather_context for w in ["雨", "雪", "冷"]):
+                search_keyword += " 火锅 热汤 暖锅"
+            elif any(w in weather_context for w in ["热", "高温"]):
+                search_keyword += " 冷饮 凉菜 轻食"
         
-        async with httpx.AsyncClient() as client:
-            params = {
-                "key": AMAP_API_KEY,
-                "keywords": f"{city} {search_keyword}",  # 使用增强后的关键词
-                "types": "050000",
+        source_urls = {
+            "meituan": f"https://i.meituan.com/s/{search_keyword}",
+            "dianping": f"https://www.dianping.com/search/keyword/1/0_{search_keyword}",
+            "xiaohongshu": f"https://www.xiaohongshu.com/search_result?keyword={search_keyword}&type=51",
+        }
+        search_url = source_urls.get(source, source_urls["meituan"])
+        
+        logger.info(f"[Tool:search_restaurants] 搜索 URL: {search_url}")
+        
+        if not FIRECRAWL_API_KEY:
+            logger.warning("[Tool:search_restaurants] 未配置 Firecrawl API Key")
+            return json.dumps({
+                "error": "未配置 Firecrawl API Key",
+                "restaurants": [],
+                "source": source,
                 "city": city,
-                "citylimit": True,
-                "offset": limit,
-                "page": 1,
-                "extensions": "all"
-            }
+            }, ensure_ascii=False)
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{FIRECRAWL_BASE_URL}/scrape",
+                headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
+                json={"url": search_url, "formats": ["markdown"], "onlyMainContent": True}
+            )
             
-            # 如果提供了 location，添加位置相关参数
-            if location:
-                params["location"] = location  # 中心点坐标 "经度,纬度"
-                params["radius"] = 2000  # 搜索半径 2000 米
-                params["sortrule"] = "distance"  # 按距离排序
-            
-            url = f"{AMAP_BASE_URL}/place/text"
-            logger.info(f"[Tool:search_restaurants] 请求高德 API: {url}")
-            
-            response = await client.get(url, params=params)
-            logger.info(f"[Tool:search_restaurants] 响应状态: {response.status_code}")
+            logger.info(f"[Tool:search_restaurants] Firecrawl 响应状态: {response.status_code}")
             
             if response.status_code != 200:
-                return {"error": f"API 请求失败：{response.status_code}"}
+                logger.warning(f"[Tool:search_restaurants] Firecrawl 请求失败")
+                return json.dumps({
+                    "restaurants": [],
+                    "source": source,
+                    "city": city,
+                    "error": "Firecrawl 请求失败"
+                }, ensure_ascii=False)
             
             data = response.json()
+            content = data.get("data", {}).get("markdown", "")
             
-            if data.get("status") != "1":
-                return {"error": f"搜索失败：{data.get('info', '未知错误')}"}
+            if not content:
+                logger.warning("[Tool:search_restaurants] Firecrawl 返回内容为空")
+                return json.dumps({
+                    "restaurants": [],
+                    "source": source,
+                    "city": city,
+                    "error": "未获取到内容"
+                }, ensure_ascii=False)
             
-            pois = data.get("pois", [])
-            logger.info(f"[Tool:search_restaurants] 找到 {len(pois)} 个餐厅")
-            
-            restaurants = []
-            for poi in pois:
-                cost_str = poi.get("biz_ext", {}).get("cost", "")
-                cost = int(float(cost_str)) if cost_str and cost_str != "[]" else 0
-                
-                if budget and cost > 0 and cost > budget:
-                    continue
-                
-                rating_str = poi.get("biz_ext", {}).get("rating", "")
-                rating = float(rating_str) if rating_str and rating_str != "[]" else 0
-                
-                restaurant = {
-                    "id": poi.get("id"),
-                    "name": poi.get("name"),
-                    "address": poi.get("address"),
-                    "location": poi.get("location"),
-                    "tel": poi.get("tel", "暂无电话"),
-                    "rating": rating,
-                    "cost_per_person": cost,
-                    "opening_hours": poi.get("opening_hours", "信息待核实"),
-                    "type": poi.get("type"),
-                    "distance": poi.get("distance", "")
-                }
-                restaurants.append(restaurant)
-                logger.debug(f"[Tool:search_restaurants] 餐厅: {restaurant['name']}, 评分: {rating}, 人均: {cost}")
-            
-            restaurants.sort(key=lambda x: x.get("rating", 0), reverse=True)
-            
-            result = {
-                "city": city,
-                "keyword": keyword,
-                "taste": taste,
-                "budget": budget,
-                "count": len(restaurants),
-                "restaurants": restaurants[:limit],
-                "note": f"✅ 找到 {len(restaurants)} 家餐厅，已按评分排序"
-            }
+            restaurants = _parse_restaurants_from_markdown(content, budget, limit)
             
             logger.info(f"[Tool:search_restaurants] 执行成功，返回 {len(restaurants)} 家餐厅")
             logger.info(f"[Tool:search_restaurants] ========== 执行完成 ==========")
-            return result
+            
+            return json.dumps({
+                "restaurants": restaurants,
+                "source": source,
+                "city": city,
+            }, ensure_ascii=False)
             
     except Exception as e:
-        error_msg = f"搜索餐厅失败: {str(e)}"
-        logger.error(f"[Tool:search_restaurants] {error_msg}", exc_info=True)
-        return {"error": error_msg}
+        logger.error(f"[Tool:search_restaurants] 异常: {e}", exc_info=True)
+        return json.dumps({
+            "error": str(e),
+            "restaurants": [],
+            "source": source,
+            "city": city,
+        }, ensure_ascii=False)
 
 @mcp.tool()
 async def recommend_meal_plan(
@@ -878,16 +1020,21 @@ async def recommend_meal_plan(
             
             for kw in search_keywords:
                 if restaurants:
-                    break  # 已有结果，停止尝试
+                    break
                     
                 logger.info(f"[Tool:recommend_meal_plan] 尝试搜索关键词: {kw}")
-                meal_result = await search_restaurants(
+                meal_result_str = await search_restaurants(
                     city=city,
                     keyword=kw,
-                    budget=per_meal_per_person,
-                    taste=taste if kw == base_keyword else None,
+                    budget=per_meal_per_person or 0,
+                    taste=taste or "",
                     limit=5
                 )
+                
+                try:
+                    meal_result = json.loads(meal_result_str)
+                except json.JSONDecodeError:
+                    meal_result = {"restaurants": []}
                 
                 if "restaurants" in meal_result and meal_result["restaurants"]:
                     restaurants = meal_result["restaurants"]
@@ -1020,23 +1167,28 @@ async def recommend_by_cuisine(
     logger.info(f"[Tool:recommend_by_cuisine] 参数: city={city}, cuisine={cuisine}, budget={budget}")
     
     try:
-        result = await search_restaurants(
+        result_str = await search_restaurants(
             city=city,
-            location=location,
             keyword=cuisine,
-            budget=budget,
+            budget=budget or 0,
             limit=limit
         )
+        
+        try:
+            result = json.loads(result_str)
+        except json.JSONDecodeError:
+            return {"error": "解析结果失败", "city": city, "cuisine": cuisine}
         
         if "error" in result:
             return result
         
+        restaurants = result.get("restaurants", [])
         final_result = {
             "city": city,
             "cuisine": cuisine,
-            "count": result.get("count", 0),
-            "recommendations": result.get("restaurants", []),
-            "note": f"✅ 为您推荐 {city} 的 {cuisine} 餐厅，已按评分排序"
+            "count": len(restaurants),
+            "recommendations": restaurants,
+            "note": f"✅ 为您推荐 {city} 的 {cuisine} 餐厅"
         }
         
         logger.info(f"[Tool:recommend_by_cuisine] 执行成功，推荐 {final_result['count']} 家餐厅")
