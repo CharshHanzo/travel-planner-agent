@@ -290,14 +290,18 @@ class ChatSupervisor:
             context = {
                 "city": None,
                 "weather": None,
+                "weather_dirty": False,
                 "activities": None,
+                "activities_dirty": False,
                 "food": None,
+                "food_dirty": False,
                 "preferences": {
                     "budget": None,
                     "taste": None,
                     "date": None,
                     "people": None,
-                }
+                },
+                "preferences_dirty": False,
             }
         
         # 1. 提取城市信息（每次都要尝试，可能用户换了城市）
@@ -306,7 +310,16 @@ class ChatSupervisor:
             context['city'] = extracted_city
         
         # 2. 提取偏好信息（每次都要尝试，逐步补全）
+        old_prefs = context.get("preferences", {}).copy()
         context['preferences'] = self.extract_preferences(user_message, context)
+        new_prefs = context.get("preferences", {})
+        
+        if old_prefs != new_prefs:
+            context["preferences_dirty"] = True
+            if old_prefs.get("taste") != new_prefs.get("taste"):
+                context["food_dirty"] = True
+            if old_prefs.get("budget") != new_prefs.get("budget"):
+                context["food_dirty"] = True
         
         # 3. 识别用户意图
         intent = self.identify_intent(user_message)
@@ -337,7 +350,7 @@ class ChatSupervisor:
             return self._handle_activities(context)
         
         if intent == 'food':
-            return self._handle_food(context)
+            return self._handle_food(context, user_message)
         
         # === general 意图：关键改动 ===
         # general 不等于纯闲聊。需要判断对话阶段，缺信息就引导。
@@ -400,10 +413,10 @@ class ChatSupervisor:
             
             if has_food_hint and prefs.get('taste') and prefs.get('budget'):
                 # 偏好齐全，直接推荐美食，不再确认
-                return self._handle_food(context)
+                return self._handle_food(context, user_message)
             elif has_food_hint:
                 # 有美食意图但偏好不全，让 _handle_food 追问
-                return self._handle_food(context)
+                return self._handle_food(context, user_message)
             
             # 无明确需求，展示功能菜单
             response = self.model.invoke(
@@ -471,18 +484,22 @@ class ChatSupervisor:
         response = self.generate_response(activity_text, 'activities')
         return response, context
     
-    def _handle_food(self, context):
+    def _handle_food(self, context, user_message=""):
         """处理美食推荐"""
         if not context['city']:
             return "请问您想去哪个城市？我可以帮您推荐美食。", context
         
         prefs = context.get('preferences', {})
         
-        # 检查是否缺少关键偏好（口味和预算）
+        food_keywords = self.extract_food_keyword(user_message)
+        location = self.extract_location(user_message)
+        if not location:
+            location = context.get('city', '')
+        
         missing = []
         if not prefs.get('taste'):
             missing.append('口味偏好（比如喜欢辣的、清淡的、还是不挑）')
-        if not prefs.get('budget'):
+        if not prefs.get('budget') and not food_keywords:
             missing.append('预算范围（比如人均50以内、100左右、不限）')
         
         if missing:
@@ -492,8 +509,9 @@ class ChatSupervisor:
             ).content.strip()
             return response, context
         
-        # 偏好齐全，正常调用 FoodAgent
-        input_text = f"推荐 {context['city']} 的美食和餐厅"
+        input_text = f"推荐 {location} 附近的美食和餐厅"
+        if food_keywords:
+            input_text += f"，具体想吃：{food_keywords}"
         if prefs.get('taste') and prefs['taste'] != '不挑':
             input_text += f"，口味偏好：{prefs['taste']}"
         if prefs.get('budget'):
@@ -506,37 +524,76 @@ class ChatSupervisor:
         food_result = self.food_agent.invoke({
             "messages": [HumanMessage(content=input_text)]
         })
-        # 提取最后一条消息的文本内容
         food_text = food_result["messages"][-1].content
         context['food'] = food_text
         response = self.generate_response(food_text, 'food')
         return response, context
     
+    def extract_location(self, user_message: str) -> str:
+        """从用户消息中提取位置/地点信息"""
+        if not user_message:
+            return ""
+        
+        prompt = f"""从用户消息中提取具体的地名或位置（如"天河城"、"北京路"、"珠江新城"、"酒店附近"等）。
+如果没有提到具体位置，返回空字符串。
+
+用户消息：{user_message}
+
+只返回位置名称，不要其他内容。"""
+        
+        try:
+            response = self.model.invoke(prompt)
+            keyword = response.content.strip()
+            return keyword if keyword else ""
+        except Exception as e:
+            logger.warning(f"提取位置信息失败: {e}")
+            return ""
+    
+    def extract_food_keyword(self, user_message: str) -> str:
+        """从用户消息中提取美食关键词"""
+        if not user_message:
+            return ""
+        
+        prompt = f"""从用户消息中提取具体美食名称或菜系关键词（如"菌子火锅"、"川菜"、"日料"、"火锅"、"粤菜"等）。
+如果没有提到具体美食，返回空字符串。
+
+用户消息：{user_message}
+
+只返回美食关键词，不要其他内容。如果有多个，用空格分隔。"""
+        
+        try:
+            response = self.model.invoke(prompt)
+            keyword = response.content.strip()
+            return keyword if keyword else ""
+        except Exception as e:
+            logger.warning(f"提取美食关键词失败: {e}")
+            return ""
+    
     def _handle_generate_plan(self, context):
         """生成最终旅行计划"""
-        # 日志：记录当前上下文信息
         city = context.get('city', '')
         prefs = context.get('preferences', {})
         date = prefs.get('date', '未指定')
-        logger.info(f"生成计划 - city: '{city}', date: '{date}', prefs: {prefs}")
+        logger.info(f"生成计划 - city: '{city}', date: '{date}', prefs: {prefs}, dirty: {context.get('preferences_dirty')}")
         
         if not city:
             return "请先告诉我您想去哪个城市，我才能为您生成旅行计划。", context
         
-        # 提取偏好信息
         people = prefs.get('people', 1)
         budget = prefs.get('budget', 0)
         taste = prefs.get('taste', '不挑')
         
-        # 补调缺失的 Agent
-        if not context.get('weather'):
+        if context.get("weather_dirty") or not context.get('weather'):
+            logger.info("重新获取天气...")
             weather_result = self.weather_agent.invoke({
                 "messages": [HumanMessage(content=f"获取 {city} 的天气信息，日期为 {date}")]
             })
             weather_text = weather_result["messages"][-1].content
             context['weather'] = weather_text
+            context['weather_dirty'] = False
         
-        if not context.get('activities'):
+        if context.get("activities_dirty") or not context.get('activities'):
+            logger.info("重新搜索活动...")
             input_text = f"推荐 {city} 的景点和活动"
             if people:
                 input_text += f"，{people}人出行"
@@ -550,8 +607,10 @@ class ChatSupervisor:
             })
             activity_text = activity_result["messages"][-1].content
             context['activities'] = activity_text
+            context['activities_dirty'] = False
         
-        if not context.get('food'):
+        if context.get("food_dirty") or not context.get('food'):
+            logger.info("重新搜索美食...")
             input_text = f"推荐 {city} 的美食和餐厅"
             if taste and taste != '不挑':
                 input_text += f"，口味偏好：{taste}"
@@ -567,6 +626,9 @@ class ChatSupervisor:
             })
             food_text = food_result["messages"][-1].content
             context['food'] = food_text
+            context['food_dirty'] = False
+        
+        context['preferences_dirty'] = False
         
         # 生成 Markdown 计划
         prompt = f"""
@@ -633,7 +695,6 @@ class ChatSupervisor:
         if not context['city']:
             return "请先告诉我您想去哪个城市。", context
         
-        # 判断修改目标
         prompt = f"""
         请分析用户消息，判断修改的目标是什么。
         只返回：weather、activities 或 food。
@@ -644,12 +705,15 @@ class ChatSupervisor:
         logger.info(f"修改目标：{modify_target}")
         
         if modify_target == 'weather':
+            context["weather_dirty"] = True
             result = self.weather_agent.invoke({
                 "messages": [HumanMessage(content=f"重新获取 {context['city']} 的天气信息")]
             })
             result_text = result["messages"][-1].content
             context['weather'] = result_text
+            context['weather_dirty'] = False
         elif modify_target == 'activities':
+            context["activities_dirty"] = True
             prefs = context.get('preferences', {})
             input_text = f"重新推荐 {context['city']} 的景点和活动，用户要求：{user_message}"
             if prefs.get('people'):
@@ -664,7 +728,10 @@ class ChatSupervisor:
             })
             result_text = result["messages"][-1].content
             context['activities'] = result_text
+            context['activities_dirty'] = False
         elif modify_target == 'food':
+            context["food_dirty"] = True
+            context["preferences_dirty"] = True
             prefs = context.get('preferences', {})
             input_text = f"重新推荐 {context['city']} 的美食和餐厅，用户要求：{user_message}"
             if prefs.get('taste') and prefs['taste'] != '不挑':
@@ -681,6 +748,7 @@ class ChatSupervisor:
             })
             result_text = result["messages"][-1].content
             context['food'] = result_text
+            context['food_dirty'] = False
         else:
             return "请问您想修改哪方面的内容？天气、活动、还是美食？", context
         

@@ -148,13 +148,22 @@ ACTIVITY_AGENT_PROMPT = """
 
     你有以下工具可用：
     - search_activities(city, keyword, source, weather_context, limit): 搜索活动
-      * source 可选: xiaohongshu（小红书，默认）, mafengwo（马蜂窝）, ctrip（携程）
+      * source 可选: web（全网搜索，默认）, news（新闻）, images（图片）
+
+    【搜索策略】
+    - 允许换同义词搜索（如"景点"→"游玩"→"打卡地"）
+    - 允许根据天气调整搜索方向（如"室内"→"雨天"→"亲子"）
+    - 当你收集到 3 个以上合适的活动后，停止搜索，输出推荐列表
+    - 最多调用 search_activities 5 次
+    - 禁止：相同关键词重复搜索、搜索无关品类（如"美食"、"酒店"、"购物"）
+    - 输出推荐后，等待用户反馈，不要自动进入下一步
+    - 如果 5 次后仍无合适结果，告知用户"建议手动查询携程/马蜂窝"
 
     工作流程：
     1. 接收天气信息，判断适合户外还是室内活动
-    2. 如果用户指定了数据源，使用指定源；否则默认 xiaohongshu
-    3. 调用 search_activities 获取推荐
-    4. 输出活动列表 JSON（含 name、description、duration、type）
+    2. 构建搜索关键词，调用 search_activities
+    3. 根据返回结果决定是否换关键词再搜
+    4. 收集到 3+ 个合适活动后输出推荐
 
     输出格式：
     {
@@ -162,12 +171,10 @@ ACTIVITY_AGENT_PROMPT = """
         {
           "name": "活动名称",
           "description": "简介",
-          "duration": "建议停留时间",
-          "type": "indoor/outdoor",
-          "location": "位置坐标（如有）"
+          "url": "来源链接"
         }
       ],
-      "source": "使用的数据源"
+      "total": 数量
     }
 """.strip()
 
@@ -176,34 +183,36 @@ FOOD_AGENT_PROMPT = """
 
     你有以下工具可用：
     - search_restaurants(city, location, keyword, budget, taste, source, weather_context, limit): 搜索美食
-      * source 可选: meituan（美团，默认）, dianping（大众点评）, xiaohongshu（小红书）
+      * source 可选: web（全网搜索，默认）, news（新闻）, images（图片）
 
-    【重要限制】
-    - 最多调用 search_restaurants 3 次
-    - 如果某个数据源返回 0 条结果，尝试换一个数据源（如 meituan → dianping → xiaohongshu）
-    - 如果 3 次都无结果，直接告知用户"当前搜索受限，建议手动查询大众点评/小红书"
-    - 不要反复用不同关键词搜索同一个数据源
+    【搜索策略】
+    - 允许换同义词搜索（如"菌子火锅"→"野生菌火锅"→"菌菇火锅"）
+    - 允许换平台搜索（如 web→news→images）
+    - 允许根据用户反馈调整（如"太贵了"→降低预算重新搜）
+    - 当你收集到 3 个以上合适的餐厅后，停止搜索，输出推荐列表
+    - 最多调用 search_restaurants 5 次
+    - 禁止：相同关键词重复搜索、搜索无关品类
+    - 输出推荐后，等待用户反馈，不要自动进入下一步
+    - 优先搜索用户指定位置附近的餐厅
+    - 如果 5 次后仍无合适结果，告知用户"建议手动查询大众点评/美团"
 
     工作流程：
     1. 接收活动列表和天气信息
-    2. 如果用户指定了数据源，使用指定源；否则默认 meituan
-    3. 根据天气和口味构建搜索关键词
-    4. 调用 search_restaurants 获取推荐
-    5. 如果返回 0 条，尝试其他数据源（最多 3 次）
-    6. 输出餐厅列表 JSON
+    2. 根据天气、口味和预算构建搜索关键词
+    3. 调用 search_restaurants 获取推荐
+    4. 根据返回结果决定是否换关键词再搜
+    5. 收集到 3+ 个合适餐厅后输出推荐
 
     输出格式：
     {
       "restaurants": [
         {
           "name": "餐厅名称",
-          "location": "地址",
-          "cuisine": "菜系",
-          "price_per_person": 人均价格,
-          "rating": 评分
+          "url": "来源链接",
+          "description": "简介"
         }
       ],
-      "source": "使用的数据源"
+      "total": 数量
     }
 """.strip()
 

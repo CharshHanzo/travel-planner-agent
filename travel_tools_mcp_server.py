@@ -29,6 +29,25 @@ OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY")
 AMAP_API_KEY = os.getenv("AMAP_API_KEY")
 
+FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/scrape"
+FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search"
+
+MAX_SEARCH_CALLS_PER_TOOL = 6
+_search_calls = {"search_activities": 0, "search_restaurants": 0}
+
+def _check_search_limit(tool_name: str) -> bool:
+    if _search_calls.get(tool_name, 0) >= MAX_SEARCH_CALLS_PER_TOOL:
+        logger.warning(f"[Tool:{tool_name}] 已达到调用上限 {MAX_SEARCH_CALLS_PER_TOOL}")
+        return False
+    _search_calls[tool_name] += 1
+    logger.info(f"[Tool:{tool_name}] 调用次数: {_search_calls[tool_name]}/{MAX_SEARCH_CALLS_PER_TOOL}")
+    return True
+
+def _reset_search_calls():
+    global _search_calls
+    _search_calls = {"search_activities": 0, "search_restaurants": 0}
+    logger.info("[重置] 搜索调用计数器已重置")
+
 def validate_config() -> bool:
     """验证必要的配置"""
     missing_keys = []
@@ -45,7 +64,6 @@ def validate_config() -> bool:
 # 配置区域
 FORECAST_BASE_URL = "https://api.openweathermap.org/data/2.5/forecast"
 GEOCODING_BASE_URL = "http://api.openweathermap.org/geo/1.0/direct"
-FIRECRAWL_BASE_URL = "https://api.firecrawl.dev/v1"
 AMAP_BASE_URL = "https://restapi.amap.com/v3"
 
 # 全局信号量控制并发
@@ -318,85 +336,98 @@ def get_mock_activities(city: str, keyword: str, limit: int) -> dict:
 async def search_activities(
     city: str,
     keyword: str = "",
-    source: str = "xiaohongshu",
+    source: str = "web",
     weather_context: str = "",
     limit: int = 5
 ) -> str:
     """
-    搜索目的地景点活动，通过 Firecrawl 从指定平台抓取。
+    搜索目的地景点活动，通过 Firecrawl Search API 全网搜索。
     
     Args:
         city: 城市名称
         keyword: 搜索关键词
-        source: 数据源（xiaohongshu/mafengwo/ctrip）
+        source: 数据源（web/news/images）
         weather_context: 天气上下文（如"雨天"、"晴天30度"）
         limit: 返回结果数量
     """
     logger.info(f"[Tool:search_activities] ========== 开始执行 ==========")
-    logger.info(f"[Tool:search_activities] 参数: city={city}, keyword={keyword}, source={source}, limit={limit}")
+    logger.info(f"[Tool:search_activities] 参数: city={city}, keyword={keyword}, limit={limit}")
+    
+    if not _check_search_limit("search_activities"):
+        return json.dumps({
+            "activities": [],
+            "total": 0,
+            "error": "搜索次数已达上限，建议手动查询"
+        }, ensure_ascii=False)
     
     try:
-        search_keyword = f"{city} {keyword} 旅游攻略 景点推荐"
+        query = f"{city} {keyword} 景点 攻略 推荐".strip()
+        
         if weather_context:
             if any(w in weather_context for w in ["雨", "雪"]):
-                search_keyword += " 室内 雨天"
+                query += " 室内 雨天"
             elif any(w in weather_context for w in ["热", "高温"]):
-                search_keyword += " 避暑 室内"
+                query += " 避暑 室内"
         
-        source_urls = {
-            "xiaohongshu": f"https://www.xiaohongshu.com/search_result?keyword={search_keyword}&type=51",
-            "mafengwo": f"https://www.mafengwo.cn/search/q.php?q={search_keyword}",
-            "ctrip": f"https://you.ctrip.com/searchsite/?query={search_keyword}",
-        }
-        search_url = source_urls.get(source, source_urls["xiaohongshu"])
-        
-        logger.info(f"[Tool:search_activities] 搜索 URL: {search_url}")
+        query = " ".join(query.split())
+        logger.info(f"[Tool:search_activities] 搜索查询: {query}")
         
         if not FIRECRAWL_API_KEY:
             logger.warning("[Tool:search_activities] 未配置 Firecrawl API Key")
             result = get_mock_activities(city, keyword, limit)
             return json.dumps(result, ensure_ascii=False)
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
-                f"{FIRECRAWL_BASE_URL}/scrape",
-                headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
-                json={"url": search_url, "formats": ["markdown"], "onlyMainContent": True}
+                FIRECRAWL_SEARCH_URL,
+                headers={
+                    "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "limit": limit,
+                    "location": "China",
+                    "scrapeOptions": {
+                        "formats": ["markdown"],
+                        "onlyMainContent": True,
+                        "waitFor": 2000,
+                    },
+                }
             )
             
             logger.info(f"[Tool:search_activities] Firecrawl 响应状态: {response.status_code}")
             
             if response.status_code != 200:
-                logger.warning(f"[Tool:search_activities] Firecrawl 请求失败，使用模拟数据")
+                logger.warning(f"[Tool:search_activities] Firecrawl 请求失败: {response.status_code}")
                 result = get_mock_activities(city, keyword, limit)
                 return json.dumps(result, ensure_ascii=False)
             
             data = response.json()
-            content = data.get("data", {}).get("markdown", "")
             
-            if not content:
-                logger.warning("[Tool:search_activities] Firecrawl 返回内容为空，使用模拟数据")
+            results = []
+            for item in data.get("data", []):
+                results.append({
+                    "name": item.get("title", "未知"),
+                    "url": item.get("url", ""),
+                    "description": (item.get("markdown") or item.get("description", ""))[:500],
+                    "source": "web_search",
+                })
+            
+            logger.info(f"[Tool:search_activities] 解析出的活动: {json.dumps(results, ensure_ascii=False)[:500]}")
+            
+            if not results:
+                logger.warning("[Tool:search_activities] 解析结果为空")
                 result = get_mock_activities(city, keyword, limit)
                 return json.dumps(result, ensure_ascii=False)
             
-            activities = _parse_activities_from_markdown(content, limit)
-            
-            if not activities:
-                logger.warning("[Tool:search_activities] 解析结果为空")
-                return json.dumps({
-                    "activities": [],
-                    "source": source,
-                    "city": city,
-                    "error": f"Firecrawl 成功抓取 {source}，但未能解析出活动信息。建议：1) 调整搜索关键词 2) 尝试其他数据源",
-                    "raw_preview": content[:300] if content else ""
-                }, ensure_ascii=False)
-            
-            logger.info(f"[Tool:search_activities] 执行成功，返回 {len(activities)} 个活动")
+            logger.info(f"[Tool:search_activities] 执行成功，返回 {len(results)} 个活动")
             logger.info(f"[Tool:search_activities] ========== 执行完成 ==========")
             
             return json.dumps({
-                "activities": activities,
-                "source": source,
+                "activities": results,
+                "total": len(results),
+                "query": query,
                 "city": city,
             }, ensure_ascii=False)
             
@@ -835,12 +866,12 @@ async def search_restaurants(
     keyword: str = "",
     budget: int = 0,
     taste: str = "",
-    source: str = "meituan",
+    source: str = "web",
     weather_context: str = "",
     limit: int = 5
 ) -> str:
     """
-    搜索餐厅美食，通过 Firecrawl 从指定平台抓取。
+    搜索餐厅美食，通过 Firecrawl Search API 全网搜索。
     
     Args:
         city: 城市名称
@@ -848,84 +879,96 @@ async def search_restaurants(
         keyword: 美食关键词
         budget: 人均预算
         taste: 口味偏好（辣/清淡/不挑）
-        source: 数据源（meituan/dianping/xiaohongshu）
+        source: 数据源（web/news/images）
         weather_context: 天气上下文
         limit: 返回数量
     """
     logger.info(f"[Tool:search_restaurants] ========== 开始执行 ==========")
-    logger.info(f"[Tool:search_restaurants] 参数: city={city}, source={source}, limit={limit}")
+    logger.info(f"[Tool:search_restaurants] 参数: city={city}, location={location}, keyword={keyword}, limit={limit}")
+    
+    if not _check_search_limit("search_restaurants"):
+        return json.dumps({
+            "restaurants": [],
+            "total": 0,
+            "error": "搜索次数已达上限，建议手动查询"
+        }, ensure_ascii=False)
     
     try:
-        search_keyword = f"{city} {location} "
-        if taste and taste != "不挑":
-            search_keyword += f"{taste}口味 "
-        if keyword:
-            search_keyword += keyword
-        else:
-            search_keyword += "美食"
+        query_parts = []
+        if location and location != city:
+            query_parts.append(location)
+        query_parts.extend([city, keyword, taste, "餐厅", "推荐"])
+        query = " ".join(filter(None, query_parts))
+        
+        if budget > 0:
+            query += f" 人均{budget}元"
         
         if weather_context:
             if any(w in weather_context for w in ["雨", "雪", "冷"]):
-                search_keyword += " 火锅 热汤 暖锅"
+                query += " 火锅 热汤 暖锅"
             elif any(w in weather_context for w in ["热", "高温"]):
-                search_keyword += " 冷饮 凉菜 轻食"
+                query += " 冷饮 凉菜 轻食"
         
-        source_urls = {
-            "meituan": f"https://i.meituan.com/s/{search_keyword}",
-            "dianping": f"https://www.dianping.com/search/keyword/1/0_{search_keyword}",
-            "xiaohongshu": f"https://www.xiaohongshu.com/search_result?keyword={search_keyword}&type=51",
-        }
-        search_url = source_urls.get(source, source_urls["meituan"])
-        
-        logger.info(f"[Tool:search_restaurants] 搜索 URL: {search_url}")
+        query = " ".join(query.split())
+        logger.info(f"[Tool:search_restaurants] 搜索查询: {query}")
         
         if not FIRECRAWL_API_KEY:
             logger.warning("[Tool:search_restaurants] 未配置 Firecrawl API Key")
             return json.dumps({
                 "error": "未配置 Firecrawl API Key",
                 "restaurants": [],
-                "source": source,
                 "city": city,
             }, ensure_ascii=False)
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
-                f"{FIRECRAWL_BASE_URL}/scrape",
-                headers={"Authorization": f"Bearer {FIRECRAWL_API_KEY}"},
-                json={"url": search_url, "formats": ["markdown"], "onlyMainContent": True}
+                FIRECRAWL_SEARCH_URL,
+                headers={
+                    "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "query": query,
+                    "limit": limit,
+                    "location": "China",
+                    "scrapeOptions": {
+                        "formats": ["markdown"],
+                        "onlyMainContent": True,
+                        "waitFor": 2000,
+                    },
+                }
             )
             
             logger.info(f"[Tool:search_restaurants] Firecrawl 响应状态: {response.status_code}")
             
             if response.status_code != 200:
-                logger.warning(f"[Tool:search_restaurants] Firecrawl 请求失败")
+                logger.warning(f"[Tool:search_restaurants] Firecrawl 请求失败: {response.status_code}")
                 return json.dumps({
                     "restaurants": [],
-                    "source": source,
                     "city": city,
-                    "error": "Firecrawl 请求失败"
+                    "error": f"Firecrawl 请求失败: {response.status_code}"
                 }, ensure_ascii=False)
             
             data = response.json()
-            content = data.get("data", {}).get("markdown", "")
             
-            if not content:
-                logger.warning("[Tool:search_restaurants] Firecrawl 返回内容为空")
-                return json.dumps({
-                    "restaurants": [],
-                    "source": source,
-                    "city": city,
-                    "error": "未获取到内容"
-                }, ensure_ascii=False)
+            results = []
+            for item in data.get("data", []):
+                results.append({
+                    "name": item.get("title", "未知"),
+                    "url": item.get("url", ""),
+                    "description": (item.get("markdown") or item.get("description", ""))[:500],
+                    "source": "web_search",
+                })
             
-            restaurants = _parse_restaurants_from_markdown(content, budget, limit)
+            logger.info(f"[Tool:search_restaurants] 解析出的餐厅: {json.dumps(results, ensure_ascii=False)[:500]}")
             
-            logger.info(f"[Tool:search_restaurants] 执行成功，返回 {len(restaurants)} 家餐厅")
+            logger.info(f"[Tool:search_restaurants] 执行成功，返回 {len(results)} 家餐厅")
             logger.info(f"[Tool:search_restaurants] ========== 执行完成 ==========")
             
             return json.dumps({
-                "restaurants": restaurants,
-                "source": source,
+                "restaurants": results,
+                "total": len(results),
+                "query": query,
                 "city": city,
             }, ensure_ascii=False)
             
@@ -934,7 +977,6 @@ async def search_restaurants(
         return json.dumps({
             "error": str(e),
             "restaurants": [],
-            "source": source,
             "city": city,
         }, ensure_ascii=False)
 
