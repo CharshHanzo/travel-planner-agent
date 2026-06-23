@@ -12,6 +12,11 @@ export const API_ENDPOINTS = {
   historyTrips: `${API_BASE}/travel/history/trips`,
   // 用户偏好
   userPreferences: `${API_BASE}/travel/user/preferences`,
+  // 认证
+  authRegister: `${API_BASE}/auth/register`,
+  authLogin: `${API_BASE}/auth/login`,
+  authRefresh: `${API_BASE}/auth/refresh`,
+  authDevice: `${API_BASE}/auth/device`,
 }
 
 export default API_BASE

@@ -9,3 +9,5 @@ mcp
 httpx
 python-dotenv
 pydantic-settings
+bcrypt
+pyjwt

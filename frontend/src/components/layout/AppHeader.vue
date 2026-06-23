@@ -30,17 +30,14 @@
       </nav>
     </div>
     <div class="header-right">
-      <el-dropdown>
-        <span class="user-info">
-          <el-avatar size="small">U</el-avatar>
-          <span class="username" v-if="!isMobile">User</span>
-          <el-icon><ArrowDown /></el-icon>
-        </span>
+      <router-link v-if="!authStore.isLoggedIn" to="/login" class="login-btn">
+        <el-button type="text">登录</el-button>
+      </router-link>
+      <el-dropdown v-else>
+        <span class="user-info">{{ authStore.user?.username }}</span>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item>个人中心</el-dropdown-item>
-            <el-dropdown-item>设置</el-dropdown-item>
-            <el-dropdown-item divided>退出登录</el-dropdown-item>
+            <el-dropdown-item @click="handleLogout">退出登录</el-dropdown-item>
           </el-dropdown-menu>
         </template>
       </el-dropdown>
@@ -53,7 +50,6 @@
         <el-icon><Menu /></el-icon>
       </el-button>
     </div>
-    <!-- 移动端菜单 -->
     <div class="mobile-menu" v-if="isMobile && showMobileMenu">
       <router-link to="/" class="mobile-nav-item" active-class="active" @click="toggleMobileMenu">
         <el-icon><House /></el-icon>
@@ -75,13 +71,30 @@
         <el-icon><Setting /></el-icon>
         <span>设置</span>
       </router-link>
+      <template v-if="!authStore.isLoggedIn">
+        <router-link to="/login" class="mobile-nav-item" @click="toggleMobileMenu">
+          <el-icon><User /></el-icon>
+          <span>登录</span>
+        </router-link>
+      </template>
+      <template v-else>
+        <div class="mobile-user">
+          <span>{{ authStore.user?.username }}</span>
+          <el-button type="text" @click="handleLogout">退出登录</el-button>
+        </div>
+      </template>
     </div>
   </header>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import { ArrowDown, House, Calendar, Clock, Setting, Menu, ChatDotSquare } from '@element-plus/icons-vue'
+import { ArrowDown, House, Calendar, Clock, Setting, Menu, ChatDotSquare, User, UserPlus } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const router = useRouter()
+const authStore = useAuthStore()
 
 const isMobile = ref(false)
 const showMobileMenu = ref(false)
@@ -94,9 +107,16 @@ const toggleMobileMenu = () => {
   showMobileMenu.value = !showMobileMenu.value
 }
 
+const handleLogout = () => {
+  authStore.logout()
+  router.push('/')
+  showMobileMenu.value = false
+}
+
 onMounted(() => {
   checkMobile()
   window.addEventListener('resize', checkMobile)
+  authStore.initFromStorage()
 })
 
 onUnmounted(() => {
@@ -164,6 +184,10 @@ onUnmounted(() => {
     display: flex;
     align-items: center;
 
+    .login-btn, .register-btn {
+      margin-left: $spacing-sm;
+    }
+
     .user-info {
       display: flex;
       align-items: center;
@@ -219,6 +243,35 @@ onUnmounted(() => {
         background-color: rgba($primary-color, 0.1);
         color: $primary-color;
         font-weight: 500;
+      }
+    }
+
+    .mobile-auth {
+      padding: $spacing-sm $spacing-lg;
+      border-top: 1px solid #e4e7ed;
+      margin-top: $spacing-sm;
+
+      .mobile-nav-item {
+        justify-content: center;
+        padding: $spacing-md $spacing-lg;
+      }
+    }
+
+    .mobile-user {
+      padding: $spacing-sm $spacing-lg;
+      border-top: 1px solid #e4e7ed;
+      margin-top: $spacing-sm;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+
+      .user-name {
+        color: #303133;
+        font-weight: 500;
+      }
+
+      .logout-btn {
+        color: #f56c6c;
       }
     }
   }

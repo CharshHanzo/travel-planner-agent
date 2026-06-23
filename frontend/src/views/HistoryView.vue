@@ -6,7 +6,6 @@
         placeholder="搜索城市" 
         class="search-input"
         clearable
-        @input="handleSearch"
       >
         <template #prefix>
           <el-icon><Search /></el-icon>
@@ -17,7 +16,6 @@
         v-model="ratingFilter" 
         placeholder="评分筛选" 
         class="rating-select"
-        @change="handleSearch"
       >
         <el-option label="全部" :value="''" />
         <el-option label="3分及以上" :value="3" />
@@ -65,7 +63,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { Search, Loading } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import TripCard from '@/components/history/TripCard.vue'
@@ -79,8 +77,11 @@ const searchCity = ref('')
 const ratingFilter = ref<number | string>('')
 const showDetail = ref(false)
 const selectedTripId = ref<string | null>(null)
+let isLoadingTrips = false
 
 async function loadTrips() {
+  if (isLoadingTrips) return
+  isLoadingTrips = true
   loading.value = true
   try {
     const result = await fetchTrips({
@@ -94,11 +95,8 @@ async function loadTrips() {
     trips.value = []
   } finally {
     loading.value = false
+    isLoadingTrips = false
   }
-}
-
-function handleSearch() {
-  loadTrips()
 }
 
 function handleViewDetail(tripId: string) {
@@ -125,6 +123,11 @@ async function handleDelete(tripId: string) {
     ElMessage.error('删除失败')
   }
 }
+
+// 搜索和筛选自动触发
+watch([searchCity, ratingFilter], () => {
+  loadTrips()
+})
 
 onMounted(() => {
   loadTrips()

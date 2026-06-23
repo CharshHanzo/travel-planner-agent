@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     """应用配置类"""
     
     # LLM Provider Configuration
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "xiaomi")  # dashscope, xiaomi
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "dashscope")  # dashscope, xiaomi
     
     # DashScope (通义千问) 配置
     DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")

@@ -3,6 +3,7 @@ from datetime import datetime
 import logging
 from sqlmodel import Session
 import json
+from typing import Optional
 
 from app.api.v1.schemas.travel import TravelRequest, TravelResponse
 from app.services.travel_planner import TravelPlannerService
@@ -11,6 +12,8 @@ from app.services.trip_service import create_trip
 from app.db import get_session, engine as db_engine
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 from app.services.learning_engine import LearningEngine
+from app.models.user import User
+from app.core.dependencies import get_current_user
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -21,7 +24,11 @@ router = APIRouter()
 planner_service = TravelPlannerService()
 
 @router.post("/plan", response_model=TravelResponse)
-async def plan_travel(travel_request: TravelRequest, session: Session = Depends(get_session)):
+async def plan_travel(
+    travel_request: TravelRequest,
+    session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
+):
     try:
         logger.error("【DEBUG】plan_travel 被调用")
         
@@ -35,13 +42,11 @@ async def plan_travel(travel_request: TravelRequest, session: Session = Depends(
         result_markdown = remove_coordinates_json(raw_result)
         formatted_coords = format_coordinates_for_frontend(coordinates) if coordinates else None
         
-        # 获取或创建用户
-        user = get_or_create_user(session, travel_request.device_id)
-        
         # 保存行程记录
         trip = create_trip(
             session=session,
-            user_id=user.id,
+            user_id=current_user.id if current_user else None,
+            device_id=travel_request.device_id if not current_user else None,
             city=travel_request.city,
             travel_date=travel_request.travel_date.isoformat(),
             people_count=travel_request.people_count,

@@ -23,8 +23,9 @@ def get_trip_by_session(session: Session, session_id: str) -> Optional[Trip]:
 
 def upsert_trip(
     session: Session,
-    user_id: str,
-    session_id: str,
+    user_id: Optional[int] = None,
+    device_id: Optional[str] = None,
+    session_id: str = "",
     city: Optional[str] = None,
     travel_date: Optional[str] = None,
     people_count: Optional[int] = None,
@@ -44,6 +45,8 @@ def upsert_trip(
     
     if trip:
         # 更新已有记录
+        if user_id is not None: trip.user_id = user_id
+        if device_id is not None: trip.device_id = device_id
         if city is not None: trip.city = city or "未命名行程"
         if travel_date: trip.travel_date = travel_date
         if people_count: trip.people_count = people_count
@@ -71,6 +74,7 @@ def upsert_trip(
         
         trip = Trip(
             user_id=user_id,
+            device_id=device_id,
             city=city or "未命名行程",
             travel_date=travel_date or "",
             people_count=people_count or 1,
@@ -91,8 +95,17 @@ def upsert_trip(
     
     return trip
 
-def create_trip(session: Session, **kwargs) -> Trip:
-    trip = Trip(**kwargs)
+def create_trip(
+    session: Session,
+    user_id: Optional[int] = None,
+    device_id: Optional[str] = None,
+    **kwargs
+) -> Trip:
+    trip = Trip(
+        user_id=user_id,
+        device_id=device_id if not user_id else None,
+        **kwargs,
+    )
     trip.semantic_text = generate_semantic_text(trip)
     session.add(trip)
     session.commit()
@@ -124,6 +137,42 @@ def list_trips(
     
     query = query.order_by(Trip.created_at.desc()).offset(offset).limit(limit)
     return session.exec(query).all()
+
+def list_trips_by_user(
+    session: Session,
+    user_id: int,
+    city: Optional[str] = None,
+    rating_min: Optional[float] = None,
+    offset: int = 0,
+    limit: int = 10,
+) -> list[Trip]:
+    query = select(Trip).where(
+        Trip.user_id == user_id,
+        Trip.is_deleted == False,
+    )
+    if city:
+        query = query.where(Trip.city.contains(city))
+    if rating_min is not None:
+        query = query.where(Trip.rating >= rating_min)
+    return session.exec(query.order_by(Trip.created_at.desc()).offset(offset).limit(limit)).all()
+
+def list_trips_by_device(
+    session: Session,
+    device_id: str,
+    city: Optional[str] = None,
+    rating_min: Optional[float] = None,
+    offset: int = 0,
+    limit: int = 10,
+) -> list[Trip]:
+    query = select(Trip).where(
+        Trip.device_id == device_id,
+        Trip.is_deleted == False,
+    )
+    if city:
+        query = query.where(Trip.city.contains(city))
+    if rating_min is not None:
+        query = query.where(Trip.rating >= rating_min)
+    return session.exec(query.order_by(Trip.created_at.desc()).offset(offset).limit(limit)).all()
 
 def soft_delete_trip(session: Session, trip_id: str) -> bool:
     trip = session.get(Trip, trip_id)

@@ -10,7 +10,8 @@ class Trip(SQLModel, table=True):
     __tablename__ = "trips"
     
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
-    user_id: str = Field(foreign_key="users.id", index=True, description="关联用户ID")
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    device_id: Optional[str] = Field(default=None, max_length=255, index=True)
     
     city: str = Field(max_length=100, description="目的地城市")
     travel_date: str = Field(max_length=10, description="出发日期 YYYY-MM-DD")

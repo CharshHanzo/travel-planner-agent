@@ -13,6 +13,16 @@ const router = createRouter({
       }
     },
     {
+      path: '/login',
+      name: 'Login',
+      component: () => import('@/views/LoginView.vue'),
+    },
+    {
+      path: '/register',
+      name: 'Register',
+      component: () => import('@/views/RegisterView.vue'),
+    },
+    {
       path: '/planner',
       name: 'planner',
       component: () => import('../views/PlannerView.vue'),
@@ -48,7 +58,6 @@ const router = createRouter({
   ]
 })
 
-// 设置页面标题
 router.beforeEach((to, from, next) => {
   document.title = to.meta.title as string || '智能旅行规划助手'
   next()

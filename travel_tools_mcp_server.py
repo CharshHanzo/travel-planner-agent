@@ -361,15 +361,23 @@ async def search_activities(
         }, ensure_ascii=False)
     
     try:
-        query = f"{city} {keyword} 景点 攻略 推荐".strip()
+        parts = [city]
+        if keyword:
+            parts.append(keyword)
+        
+        default_words = ["景点", "攻略", "推荐", "游玩"]
+        has_default = any(w in (keyword or "") for w in default_words)
+        if not has_default:
+            parts.append("景点 攻略 推荐")
         
         if weather_context:
             if any(w in weather_context for w in ["雨", "雪"]):
-                query += " 室内 雨天"
+                parts.append("室内 雨天")
             elif any(w in weather_context for w in ["热", "高温"]):
-                query += " 避暑 室内"
+                parts.append("避暑 室内")
         
-        query = " ".join(query.split())
+        query = " ".join(filter(None, parts))
+        query = " ".join(dict.fromkeys(query.split()))
         logger.info(f"[Tool:search_activities] 搜索查询: {query}")
         
         if not FIRECRAWL_API_KEY:

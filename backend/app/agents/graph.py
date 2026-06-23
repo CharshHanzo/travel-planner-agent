@@ -103,10 +103,7 @@ def build_travel_graph():
         supervisor_name="TravelSupervisor",
     )
     
-    return workflow.compile(
-        name="travel_planner_supervisor",
-        recursion_limit=30,
-    )
+    return workflow.compile(name="travel_planner_supervisor")
 
 class ChatSupervisor:
     """对话式规划主管"""
@@ -476,7 +473,8 @@ class ChatSupervisor:
             input_text += f"，天气情况参考：{context['weather']}"
         
         activity_result = self.activity_agent.invoke({
-            "messages": [HumanMessage(content=input_text)]
+            "messages": [HumanMessage(content=input_text)],
+            "limit": 5,
         })
         # 提取最后一条消息的文本内容
         activity_text = activity_result["messages"][-1].content

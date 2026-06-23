@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query, Depends
 from sqlmodel import Session
 from app.db import get_session
-from app.services.user_service import get_or_create_user
+from app.services.user_service import get_or_create_anonymous_user
 from app.services.learning_engine import LearningEngine
 
 router = APIRouter()
@@ -11,7 +11,10 @@ def get_user_preferences(
     device_id: str = Query(...),
     session: Session = Depends(get_session),
 ):
-    user = get_or_create_user(session, device_id)
+    user = get_or_create_anonymous_user(session, device_id)
+    if not user:
+        return {"preferences": {}, "total_trips": 0, "sufficient": False}
+    
     engine = LearningEngine(session)
     
     cached = engine.get_cached_preferences(user.id)

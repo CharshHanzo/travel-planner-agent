@@ -11,10 +11,12 @@ from sqlmodel import Session
 
 from app.agents.graph import ChatSupervisor
 from app.db import get_session, engine
-from app.services.user_service import get_or_create_user
+from app.services.user_service import get_or_create_anonymous_user
 from app.services.trip_service import upsert_trip
 from app.services.learning_engine import LearningEngine
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
+from app.models.user import User
+from app.core.dependencies import get_current_user
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -39,26 +41,27 @@ class ChatRequest(BaseModel):
     device_id: Optional[str] = Field(None, description="设备唯一标识")
     restore_params: Optional[Dict[str, Any]] = Field(None, description="恢复参数（用于从历史记录恢复对话）")
 
-async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: Optional[str] = None, db_session: Session = None):
+async def stream_response(request: Request, message: str, session_id: str, context: Dict[str, Any], device_id: Optional[str] = None, db_session: Session = None, current_user: Optional[User] = None):
     """流式返回响应"""
     try:
-        # 首次处理时注入偏好
+        # 首次处理时注入偏好（仅限已登录用户）
         if "preferences_injected" not in context:
             try:
                 with Session(engine) as pref_session:
-                    user = get_or_create_user(pref_session, device_id)
-                    pref_engine = LearningEngine(pref_session)
-                    cached = pref_engine.get_cached_preferences(user.id)
-                    if cached.get("sufficient"):
-                        prefs = cached.get("preferences", {})
-                        if prefs.get("taste"):
-                            context["preferences"]["taste"] = prefs["taste"]["value"]
-                        if prefs.get("budget"):
-                            context["preferences"]["budget"] = prefs["budget"]["value"]
-                        if prefs.get("departure"):
-                            context["departure"] = prefs["departure"]["value"]
-                        if prefs.get("people_count"):
-                            context["preferences"]["people"] = prefs["people_count"]["value"]
+                    user = current_user  # 直接用 current_user，不从 device_id 反查
+                    if user:
+                        pref_engine = LearningEngine(pref_session)
+                        cached = pref_engine.get_cached_preferences(user.id)
+                        if cached.get("sufficient"):
+                            prefs = cached.get("preferences", {})
+                            if prefs.get("taste"):
+                                context["preferences"]["taste"] = prefs["taste"]["value"]
+                            if prefs.get("budget"):
+                                context["preferences"]["budget"] = prefs["budget"]["value"]
+                            if prefs.get("departure"):
+                                context["departure"] = prefs["departure"]["value"]
+                            if prefs.get("people_count"):
+                                context["preferences"]["people"] = prefs["people_count"]["value"]
                 
                 context["preferences_injected"] = True
             except Exception as e:
@@ -136,7 +139,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         yield f"event: session\ndata: {{\"session_id\": \"{session_id}\"}}\n\n"
         
         # === 宽松保存逻辑（更新消息列表到 conversation_context）===
-        if device_id and db_session:
+        if db_session:
             try:
                 city = updated_context.get('city', '')
                 prefs = updated_context.get('preferences', {})
@@ -145,13 +148,20 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                 budget = prefs.get('budget', 0)
                 taste = prefs.get('taste', '')
                 
-                # 获取或创建用户
-                user = get_or_create_user(db_session, device_id)
+                # 确定 user_id：登录用户优先
+                user_id = None
+                if current_user:
+                    user_id = current_user.id
+                elif device_id:
+                    user = get_or_create_anonymous_user(db_session, device_id)
+                    if user:
+                        user_id = user.id
                 
                 # 创建或更新行程记录
                 upsert_trip(
                     session=db_session,
-                    user_id=user.id,
+                    user_id=user_id,
+                    device_id=device_id if not user_id else None,
                     session_id=session_id,
                     city=city,
                     travel_date=travel_date,
@@ -162,10 +172,10 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                     weather_data=json.dumps(updated_context.get('weather'), ensure_ascii=False) if updated_context.get('weather') else None,
                     activities_data=json.dumps(updated_context.get('activities'), ensure_ascii=False) if updated_context.get('activities') else None,
                     food_data=json.dumps(updated_context.get('food'), ensure_ascii=False) if updated_context.get('food') else None,
-                    messages=updated_context.get("messages", []),  # 新增：传入消息列表
+                    messages=updated_context.get("messages", []),
                     mode="chat",
                 )
-                logger.info(f"对话规划行程已保存/更新，用户: {user.id}, 城市: {city}, session_id: {session_id}")
+                logger.info(f"对话规划行程已保存/更新，用户: {user_id if user_id else '匿名'}, 城市: {city}, session_id: {session_id}")
             except Exception as save_error:
                 logger.error(f"保存行程失败：{save_error}")
         
@@ -178,7 +188,12 @@ async def stream_response(request: Request, message: str, session_id: str, conte
         yield f"event: done\ndata: {{}}\n\n"
 
 @router.post("/plan-chat")
-async def plan_chat(request: Request, chat_request: ChatRequest, db_session: Session = Depends(get_session)):
+async def plan_chat(
+    request: Request,
+    chat_request: ChatRequest,
+    db_session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
+):
     """对话式规划接口（SSE 流式）"""
     try:
         # 处理会话 ID
@@ -235,7 +250,7 @@ async def plan_chat(request: Request, chat_request: ChatRequest, db_session: Ses
         
         # 返回流式响应
         return StreamingResponse(
-            stream_response(request, chat_request.message, session_id, context, chat_request.device_id, db_session),
+            stream_response(request, chat_request.message, session_id, context, chat_request.device_id, db_session, current_user),
             media_type="text/event-stream"
         )
     

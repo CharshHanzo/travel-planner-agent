@@ -1,5 +1,14 @@
 from sqlmodel import Session, select
 from app.models.user import User
+from app.models.user_device import UserDevice
+
+def get_or_create_anonymous_user(session: Session, device_id: str) -> User:
+    device = session.exec(
+        select(UserDevice).where(UserDevice.device_id == device_id)
+    ).first()
+    if device:
+        return session.get(User, device.user_id)
+    return None
 
 def get_or_create_user(session: Session, device_id: str) -> User:
     user = session.exec(

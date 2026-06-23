@@ -5,10 +5,13 @@ from pydantic import BaseModel
 
 from app.db import get_session, engine as db_engine
 from app.models.trip import Trip
+from app.models.user import User
 from app.services.user_service import get_or_create_user
 from app.services.trip_service import (
-    create_trip, list_trips, get_trip, soft_delete_trip, rate_trip
+    create_trip, list_trips, get_trip, soft_delete_trip, rate_trip,
+    list_trips_by_user, list_trips_by_device
 )
+from app.core.dependencies import get_current_user
 from app.utils.coordinates import extract_coordinates, format_coordinates_for_frontend, remove_coordinates_json
 import logging
 
@@ -59,18 +62,22 @@ def save_trip(request: TripCreateRequest, session: Session = Depends(get_session
 
 @router.get("/history/trips")
 def get_trips(
-    device_id: str = Query(...),
+    device_id: Optional[str] = Query(None),
     city: Optional[str] = Query(None),
     rating_min: Optional[float] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=50),
     session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user),
 ):
-    user = get_or_create_user(session, device_id)
-    trips = list_trips(
-        session, user.id, city=city, rating_min=rating_min,
-        offset=offset, limit=limit
-    )
+    """获取行程列表，登录用户优先用 user_id"""
+    if current_user:
+        trips = list_trips_by_user(session, current_user.id, city, rating_min, offset, limit)
+    elif device_id:
+        trips = list_trips_by_device(session, device_id, city, rating_min, offset, limit)
+    else:
+        return {"trips": [], "total": 0}
+    
     return {
         "trips": [
             {
