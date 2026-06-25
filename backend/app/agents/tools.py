@@ -15,6 +15,46 @@ logger = logging.getLogger(__name__)
 # 全局线程池，避免重复创建
 _THREAD_POOL = ThreadPoolExecutor(max_workers=10)
 
+# 搜索调用计数器（用于跨 Agent 全局统计）
+_search_call_counts = {
+    "search_activities": 0,
+    "search_restaurants": 0,
+    "plan_route": 0,
+}
+
+# 各工具的最大调用次数限制
+_SEARCH_CALL_LIMITS = {
+    "search_activities": 5,
+    "search_restaurants": 5,
+    "plan_route": 3,
+}
+
+
+def _reset_search_calls():
+    """重置所有搜索工具的调用计数器（每次新请求开始时调用）"""
+    _search_call_counts["search_activities"] = 0
+    _search_call_counts["search_restaurants"] = 0
+    _search_call_counts["plan_route"] = 0
+    logger.info("搜索调用计数器已重置")
+
+
+def _check_search_limit(tool_name: str) -> bool:
+    """检查工具是否超过调用上限，并递增计数器
+    返回 True 表示可以继续调用，False 表示已达上限
+    """
+    if tool_name not in _search_call_counts:
+        return True
+    if _search_call_counts[tool_name] >= _SEARCH_CALL_LIMITS.get(tool_name, 999):
+        logger.warning(f"工具 {tool_name} 已达调用上限 {_SEARCH_CALL_LIMITS[tool_name]} 次")
+        return False
+    _search_call_counts[tool_name] += 1
+    return True
+
+
+def _get_search_call_count(tool_name: str) -> int:
+    """获取当前工具的调用次数"""
+    return _search_call_counts.get(tool_name, 0)
+
 def run_async(coro):
     """使用全局线程池运行异步函数"""
     future = _THREAD_POOL.submit(asyncio.run, coro)

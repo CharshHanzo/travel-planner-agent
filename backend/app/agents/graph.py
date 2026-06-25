@@ -233,11 +233,21 @@ class ChatSupervisor:
         - budget: 预算（数字）
         - taste: 口味（辣/清淡/不挑）
         - people: 人数（数字）
+        - transport_mode: 出行方式（walking/transit/driving/any）
+          - "步行" = walking
+          - "走路" = walking
+          - "公共交通" = transit
+          - "地铁" = transit
+          - "公交" = transit
+          - "自驾" = driving
+          - "开车" = driving
+          - "打车" = driving
+          - "不限" = any
         
         用户消息：{user_message}
         
         请返回 JSON 格式，例如：
-        {{"date": "{tomorrow}", "budget": 500, "taste": "辣", "people": 2}}
+        {{"date": "{tomorrow}", "budget": 500, "taste": "辣", "people": 2, "transport_mode": "any"}}
         
         如果没有提到某项，对应字段设为 null。
         """
@@ -388,12 +398,14 @@ class ChatSupervisor:
             ).content.strip()
             return response, context
         
-        # 如果城市已有但缺少关键偏好（日期、人数），引导用户补充
+        # 如果城市已有但缺少关键偏好（日期、人数、出行方式），引导用户补充
         missing = []
         if not prefs.get('date'):
             missing.append('出发日期')
         if not prefs.get('people'):
             missing.append('旅行人数')
+        if not prefs.get('transport_mode'):
+            missing.append('出行方式（步行、公共交通、自驾打车或不限）')
         
         if missing:
             response = self.model.invoke(
@@ -464,7 +476,8 @@ class ChatSupervisor:
         
         # 构建输入消息，包含已有的偏好信息
         prefs = context.get('preferences', {})
-        input_text = f"推荐 {context['city']} 的景点和活动"
+        transport = prefs.get('transport_mode', 'any')
+        input_text = f"推荐 {context['city']} 的景点和活动，出行方式：{transport}"
         if prefs.get('people'):
             input_text += f"，{prefs['people']}人出行"
         if prefs.get('date'):
@@ -580,6 +593,7 @@ class ChatSupervisor:
         people = prefs.get('people', 1)
         budget = prefs.get('budget', 0)
         taste = prefs.get('taste', '不挑')
+        transport_mode = prefs.get('transport_mode', 'any')
         
         if context.get("weather_dirty") or not context.get('weather'):
             logger.info("重新获取天气...")
@@ -592,7 +606,7 @@ class ChatSupervisor:
         
         if context.get("activities_dirty") or not context.get('activities'):
             logger.info("重新搜索活动...")
-            input_text = f"推荐 {city} 的景点和活动"
+            input_text = f"推荐 {city} 的景点和活动，出行方式：{transport_mode}"
             if people:
                 input_text += f"，{people}人出行"
             if date and date != '未指定':

@@ -62,6 +62,8 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                                 context["departure"] = prefs["departure"]["value"]
                             if prefs.get("people_count"):
                                 context["preferences"]["people"] = prefs["people_count"]["value"]
+                            if prefs.get("transport_mode"):
+                                context["preferences"]["transport_mode"] = prefs["transport_mode"]["value"]
                 
                 context["preferences_injected"] = True
             except Exception as e:
@@ -147,6 +149,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                 people_count = prefs.get('people', 1)
                 budget = prefs.get('budget', 0)
                 taste = prefs.get('taste', '')
+                transport_mode = prefs.get('transport_mode', '')
                 
                 # 确定 user_id：登录用户优先
                 user_id = None
@@ -168,6 +171,7 @@ async def stream_response(request: Request, message: str, session_id: str, conte
                     people_count=people_count,
                     budget=budget,
                     taste=taste,
+                    transport_mode=transport_mode,
                     plan_markdown=cleaned_response if is_plan else None,
                     weather_data=json.dumps(updated_context.get('weather'), ensure_ascii=False) if updated_context.get('weather') else None,
                     activities_data=json.dumps(updated_context.get('activities'), ensure_ascii=False) if updated_context.get('activities') else None,
@@ -211,6 +215,7 @@ async def plan_chat(
                     "taste": None,
                     "date": None,
                     "people": None,
+                    "transport_mode": None,
                 }
             }
             
@@ -227,6 +232,8 @@ async def plan_chat(
                     context["preferences"]["budget"] = restore["budget"]
                 if restore.get("taste"):
                     context["preferences"]["taste"] = restore["taste"]
+                if restore.get("transport_mode"):
+                    context["preferences"]["transport_mode"] = restore["transport_mode"]
         else:
             # 使用现有会话 ID
             session_id = chat_request.session_id
@@ -241,6 +248,7 @@ async def plan_chat(
                     "taste": None,
                     "date": None,
                     "people": None,
+                    "transport_mode": None,
                 }
             })
         

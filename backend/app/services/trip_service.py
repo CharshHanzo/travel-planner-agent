@@ -37,6 +37,7 @@ def upsert_trip(
     food_data: Optional[str] = None,
     messages: Optional[list] = None,
     mode: str = "chat",
+    transport_mode: Optional[str] = None,
 ) -> Trip:
     """创建或更新对话模式下的行程记录"""
     import json
@@ -56,6 +57,7 @@ def upsert_trip(
         if weather_data: trip.weather_data = weather_data
         if activities_data: trip.activities_data = activities_data
         if food_data: trip.food_data = food_data
+        if transport_mode: trip.transport_mode = transport_mode
         
         # 更新会话上下文（保留原有数据）
         context = json.loads(trip.conversation_context or "{}")
@@ -80,6 +82,7 @@ def upsert_trip(
             people_count=people_count or 1,
             budget=budget or 0,
             taste=taste,
+            transport_mode=transport_mode,
             plan_markdown=plan_markdown or "",
             weather_data=weather_data,
             activities_data=activities_data,

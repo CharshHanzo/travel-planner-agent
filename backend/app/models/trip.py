@@ -20,6 +20,7 @@ class Trip(SQLModel, table=True):
     taste: Optional[str] = Field(default=None, max_length=10, description="口味偏好")
     departure: Optional[str] = Field(default=None, max_length=100, description="出发地点")
     activity_count: Optional[int] = Field(default=3, description="活动数量")
+    transport_mode: Optional[str] = Field(default=None, max_length=20, description="出行方式：walking/transit/driving/any")
     
     plan_markdown: str = Field(default="", description="完整旅行计划 Markdown")
     weather_data: Optional[str] = Field(default=None, description="WeatherAgent JSON 结果")

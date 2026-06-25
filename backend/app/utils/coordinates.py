@@ -62,12 +62,19 @@ def remove_coordinates_json(markdown: str) -> str:
     return cleaned.strip()
 
 
-def format_coordinates_for_frontend(coords: Dict[str, Any]) -> Dict[str, Any]:
+def format_coordinates_for_frontend(coords: Any) -> Dict[str, Any]:
     """将坐标数据转换为前端友好格式"""
     result = {
         "points": [],
         "route": None,
     }
+    
+    # ✅ 兼容传入 list 的情况
+    if isinstance(coords, list):
+        return result
+    
+    if not isinstance(coords, dict):
+        return result
     
     # 处理景点
     for activity in coords.get("activities", []):

@@ -13,6 +13,7 @@ class TravelRequest(BaseModel):
     activity_count: int = Field(3, ge=1, le=5, description="每天活动数量")
     activity_source: str = Field("xiaohongshu", description="活动数据源")
     food_source: str = Field("meituan", description="美食数据源")
+    transport_mode: Optional[str] = Field(default="any", max_length=20, description="出行方式：walking/transit/driving/any")
     
     @field_validator('travel_date')
     @classmethod

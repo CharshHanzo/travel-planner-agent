@@ -1,6 +1,7 @@
 import httpx
 import json
 import math
+import time
 from mcp.server.fastmcp import FastMCP
 import os
 from dotenv import load_dotenv
@@ -33,19 +34,34 @@ FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/scrape"
 FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v1/search"
 
 MAX_SEARCH_CALLS_PER_TOOL = 6
-_search_calls = {"search_activities": 0, "search_restaurants": 0}
+COUNTER_TIMEOUT = 120
+
+_search_calls = {
+    "search_activities": {"count": 0, "last_reset": time.time()},
+    "search_restaurants": {"count": 0, "last_reset": time.time()},
+}
 
 def _check_search_limit(tool_name: str) -> bool:
-    if _search_calls.get(tool_name, 0) >= MAX_SEARCH_CALLS_PER_TOOL:
+    now = time.time()
+    info = _search_calls[tool_name]
+    if now - info["last_reset"] > COUNTER_TIMEOUT:
+        info["count"] = 0
+        info["last_reset"] = now
+        logger.info(f"[{tool_name}] 计数器超时自动重置")
+    if info["count"] >= MAX_SEARCH_CALLS_PER_TOOL:
         logger.warning(f"[Tool:{tool_name}] 已达到调用上限 {MAX_SEARCH_CALLS_PER_TOOL}")
         return False
-    _search_calls[tool_name] += 1
-    logger.info(f"[Tool:{tool_name}] 调用次数: {_search_calls[tool_name]}/{MAX_SEARCH_CALLS_PER_TOOL}")
+    info["count"] += 1
+    logger.info(f"[Tool:{tool_name}] 调用次数: {info['count']}/{MAX_SEARCH_CALLS_PER_TOOL}")
     return True
 
 def _reset_search_calls():
     global _search_calls
-    _search_calls = {"search_activities": 0, "search_restaurants": 0}
+    now = time.time()
+    _search_calls = {
+        "search_activities": {"count": 0, "last_reset": now},
+        "search_restaurants": {"count": 0, "last_reset": now},
+    }
     logger.info("[重置] 搜索调用计数器已重置")
 
 def validate_config() -> bool:
@@ -499,6 +515,18 @@ async def plan_route(activities: Any, start_point: str = "") -> str:
     
     locations = []
     for act in parsed_activities:
+        # ✅ 兼容各种格式
+        if isinstance(act, list):
+            # 如果是列表，尝试取第一个元素
+            if len(act) > 0 and isinstance(act[0], dict):
+                act = act[0]
+            else:
+                continue
+        
+        if not isinstance(act, dict):
+            logger.warning(f"[Tool:plan_route] 跳过非 dict 元素: {type(act)}")
+            continue
+        
         location = act.get("location", "")
         name = act.get("name", "未知")
         
@@ -622,6 +650,17 @@ async def plan_route(activities: Any, start_point: str = "") -> str:
         
         start_idx = 0
         if start_point:
+            import re
+            coord_pattern = r'^\d{2,3}\.\d+,\d{2,3}\.\d+$'
+            if not re.match(coord_pattern, start_point.strip()):
+                logger.info(f"[Tool:plan_route] start_point 是地名，尝试地理编码: {start_point}")
+                geocoded = await _geocode(start_point)
+                if geocoded:
+                    start_point = geocoded
+                    logger.info(f"[Tool:plan_route] 地名转坐标成功: {geocoded}")
+                else:
+                    logger.warning(f"[Tool:plan_route] 地名转坐标失败: {start_point}，跳过起点距离计算")
+                    start_point = ""
             logger.info(f"[Tool:plan_route] 计算到起点的距离: {start_point}")
             distances_to_start = []
             for coord in coords:
@@ -1251,6 +1290,13 @@ async def recommend_by_cuisine(
         return {"error": error_msg}
 
 @mcp.tool()
+async def reset_search_calls() -> str:
+    """重置搜索调用计数器，每次新的规划请求开始时调用"""
+    _reset_search_calls()
+    return json.dumps({"message": "搜索计数器已重置", "activities_count": 0, "restaurants_count": 0}, ensure_ascii=False)
+
+
+@mcp.tool()
 async def test_connection() -> dict:
     """测试服务器连接和配置状态"""
     logger.info("[Tool:test_connection] 测试连接")
@@ -1271,7 +1317,8 @@ async def test_connection() -> dict:
             "search_restaurants - 搜索餐厅",
             "recommend_meal_plan - 推荐用餐计划",
             "get_restaurant_detail - 获取餐厅详情",
-            "recommend_by_cuisine - 按菜系推荐"
+            "recommend_by_cuisine - 按菜系推荐",
+            "reset_search_calls - 重置搜索计数器"
         ]
     }
     

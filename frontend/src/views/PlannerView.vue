@@ -1,6 +1,6 @@
 <template>
   <div class="planner-view">
-    <div class="planner-form" v-if="!loading">
+    <div class="planner-form" v-if="!hasStarted && !result">
       <h2>旅行规划</h2>
       <el-form class="planner-form-content" :model="form" :rules="rules" ref="formRef" label-width="120px">
         <el-form-item label="城市" prop="city">
@@ -14,20 +14,11 @@
             :min-date="new Date()"
           />
         </el-form-item>
-        <el-form-item  label="人数" prop="people_count">
-          <el-input-number 
-            v-model="form.people_count" 
-            :min="1" 
-            :max="20" 
-            placeholder="请输入人数" 
-          />
+        <el-form-item label="人数" prop="people_count">
+          <el-input-number v-model="form.people_count" :min="1" :max="20" />
         </el-form-item>
         <el-form-item label="预算" prop="budget">
-          <el-input-number 
-            v-model="form.budget" 
-            :min="1" 
-            placeholder="请输入预算" 
-          />
+          <el-input-number v-model="form.budget" :min="1" />
         </el-form-item>
         <el-form-item label="口味偏好" prop="taste">
           <el-select v-model="form.taste" placeholder="选择口味偏好">
@@ -39,48 +30,37 @@
         <el-form-item label="出发地点">
           <el-input v-model="form.departure" placeholder="请输入出发地点（可选）" />
         </el-form-item>
-        <el-form-item label="活动数据源">
-          <el-select v-model="form.activity_source" placeholder="选择活动数据源">
-            <el-option label="小红书（推荐）" value="xiaohongshu" />
-            <el-option label="马蜂窝" value="mafengwo" />
-            <el-option label="携程" value="ctrip" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="美食数据源">
-          <el-select v-model="form.food_source" placeholder="选择美食数据源">
-            <el-option label="美团（推荐）" value="meituan" />
-            <el-option label="大众点评" value="dianping" />
-            <el-option label="小红书" value="xiaohongshu" />
-          </el-select>
-        </el-form-item>
         <el-form-item label="活动数量" prop="activity_count">
-          <el-slider 
-            v-model="form.activity_count" 
-            :min="1" 
-            :max="5" 
-            :marks="{ 1: '1', 5: '5' }" 
-          />
-          <span class="slider-value">{{ form.activity_count }} 个活动</span>
+          <el-slider v-model="form.activity_count" :min="1" :max="5" :marks="{ 1: '1', 5: '5' }" />
+        </el-form-item>
+        <el-form-item label="出行方式">
+          <el-select v-model="form.transport_mode" placeholder="选择出行方式">
+            <el-option label="步行（≤2km）" value="walking" />
+            <el-option label="公共交通（≤5km）" value="transit" />
+            <el-option label="自驾/打车" value="driving" />
+            <el-option label="不限" value="any" />
+          </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" @click="submitForm" :loading="loading">生成建议</el-button>
+          <el-button type="primary" @click="submitForm">生成建议</el-button>
           <el-button @click="resetForm">重置</el-button>
           <el-button type="info" @click="mockTravelPlan">Mock测试</el-button>
         </el-form-item>
       </el-form>
     </div>
-    <div v-else class="loading-container">
-      <LoadingSpinner :visible="true" tip="正在生成旅行建议..." />
+
+    <div v-if="hasStarted && !result" class="plan-progress">
+      <div class="progress-title">正在生成旅行计划...</div>
+      <div v-for="(status, step) in steps" :key="step" :class="['progress-step', status]">
+        <span class="step-icon">
+          {{ status === 'done' ? '✅' : status === 'running' ? '⏳' : status === 'error' ? '❌' : '⬜' }}
+        </span>
+        <span class="step-label">{{ stepLabel[step as keyof typeof stepLabel] }}</span>
+      </div>
     </div>
-    <ErrorAlert 
-      v-if="error" 
-      :message="error" 
-      type="error" 
-      @close="error = null" 
-    />
-    <div v-if="loading" class="status-container">
-      <StatusFlow :visited-agents="visitedAgents" :current-agent="currentAgent || undefined" />
-    </div>
+
+    <ErrorAlert v-if="error" :message="error" type="error" @close="error = ''" />
+
     <div v-if="result" class="result-container" ref="resultContainer">
       <AmapView 
         v-if="coordinates && coordinates.points && coordinates.points.length > 0"
@@ -88,39 +68,61 @@
         :route="coordinates.route"
       />
       <MarkdownRenderer :content="result.result_markdown" />
+      <div class="result-actions">
+        <el-button type="primary" @click="resetForm">继续规划</el-button>
+      </div>
     </div>
   </div>
 </template>
-
 <script setup lang="ts">
-import { ref, nextTick, watch, computed, onMounted } from 'vue'
-import LoadingSpinner from '../components/common/LoadingSpinner.vue'
+import { ref, reactive, nextTick, computed, onMounted } from 'vue'
 import MarkdownRenderer from '../components/common/MarkdownRenderer.vue'
-import StatusFlow from '../components/common/StatusFlow.vue'
 import ErrorAlert from '../components/common/ErrorAlert.vue'
 import AmapView from '../components/map/AmapView.vue'
-import { useTravelPlanner } from '../composables/useTravelPlanner'
-import { useTravelStore } from '../stores/travel'
-import { TasteType, TravelRequest } from '../types/travel'
-import { createTrip } from '../api/history'
 import { fetchUserPreferences } from '../api/user'
 import { getDeviceId } from '../utils/device'
 import { extractCoordinatesFromText } from '../utils/coordinates'
 import { ElMessage } from 'element-plus'
 
+// 定义步骤类型
+type StepStatus = 'waiting' | 'running' | 'done' | 'error'
+type StepKey = 'weather' | 'activities' | 'food' | 'route' | 'plan'
+
 const formRef = ref<any>(null)
 const resultContainer = ref<HTMLElement | null>(null)
+
+// 进度步骤状态 - 使用 StepKey 类型
+const steps = ref<Record<StepKey, StepStatus>>({
+  weather: 'waiting',
+  activities: 'waiting',
+  food: 'waiting',
+  route: 'waiting',
+  plan: 'waiting',
+})
+
+const stepLabel: Record<StepKey, string> = {
+  weather: '查询天气',
+  activities: '搜索活动',
+  food: '推荐美食',
+  route: '规划路线',
+  plan: '生成计划',
+}
+
+const isPlanning = computed(() => {
+  return Object.values(steps.value).some(s => s === 'running' || s === 'done')
+})
 
 const form = ref({
   city: '广州',
   travel_date: '',
   people_count: 1,
   budget: 0,
-  taste: '' as TasteType,
+  taste: '' as string,
   departure: '',
   activity_count: 1,
   activity_source: 'xiaohongshu',
-  food_source: 'meituan'
+  food_source: 'meituan',
+  transport_mode: 'any'
 })
 
 const rules = {
@@ -132,30 +134,31 @@ const rules = {
   ],
   budget: [
     { required: true, message: '请输入预算', trigger: 'blur' },
-    { type: 'number', min: 1, message: '预算必须大于0', trigger: 'blur' }
+    { type: 'number' as const, min: 1, message: '预算必须大于0', trigger: 'blur' }
   ],
   people_count: [
     { required: true, message: '请输入人数', trigger: 'blur' },
-    { type: 'number', min: 1, max: 20, message: '人数必须在1-20之间', trigger: 'blur' }
+    { type: 'number' as const, min: 1, max: 20, message: '人数必须在1-20之间', trigger: 'blur' }
   ],
   taste: [
     { required: true, message: '请选择口味偏好', trigger: 'change' }
   ],
   activity_count: [
     { required: true, message: '请选择活动数量', trigger: 'change' },
-    { type: 'number', min: 1, max: 5, message: '活动数量必须在1-5之间', trigger: 'change' }
+    { type: 'number' as const, min: 1, max: 5, message: '活动数量必须在1-5之间', trigger: 'change' }
   ]
 }
 
-const { loading, error, result, visitedAgents, currentAgent, planTravel, reset } = useTravelPlanner()
-const travelStore = useTravelStore()
+const error = ref<string | null>('')
+const result = ref<{ result_markdown: string; coordinates: any } | null>(null)
+const hasStarted = ref(false)
 
 onMounted(async () => {
   try {
     const pref = await fetchUserPreferences()
     if (pref.sufficient && pref.preferences) {
       if (pref.preferences.taste) {
-        form.value.taste = pref.preferences.taste.value
+        form.value.taste = pref.preferences.taste.value as string
       }
       if (pref.preferences.budget) {
         form.value.budget = pref.preferences.budget.value
@@ -173,16 +176,13 @@ onMounted(async () => {
   }
 })
 
-// 解析坐标数据（优先使用接口返回的坐标，其次从Markdown中解析）
 const coordinates = computed(() => {
   if (!result.value) return null
   
-  // 优先使用后端接口直接返回的坐标
   if (result.value.coordinates && result.value.coordinates.points && result.value.coordinates.points.length > 0) {
     return result.value.coordinates
   }
   
-  // 备用方案：从Markdown中解析坐标
   if (result.value.result_markdown) {
     const parsedCoords = extractCoordinatesFromText(result.value.result_markdown)
     if (parsedCoords && parsedCoords.points.length > 0) {
@@ -191,15 +191,6 @@ const coordinates = computed(() => {
   }
   
   return null
-})
-
-// 后端 plan 接口已自动保存行程，无需前端重复保存
-
-// 监听结果变化（用于其他用途如更新 UI）
-watch(result, async (newVal) => {
-  if (newVal && newVal.result_markdown) {
-    console.log('快速规划结果已生成')
-  }
 })
 
 function formatDate(date: Date): string {
@@ -212,37 +203,112 @@ function formatDate(date: Date): string {
 const submitForm = async () => {
   if (!formRef.value) return
   
-  await formRef.value.validate(async (valid: boolean) => {
-    if (valid) {
-      // 格式化日期为 YYYY-MM-DD 字符串（使用本地时间）
-      const formattedForm = {
-        ...form.value,
-        travel_date: form.value.travel_date ? formatDate(new Date(form.value.travel_date)) : ''
-      } as TravelRequest
+  try {
+    await (formRef.value as any).validate()
+  } catch {
+    return
+  }
+  
+  hasStarted.value = true
+  
+  // 重置状态 - 使用类型安全的遍历
+  const stepKeys: StepKey[] = ['weather', 'activities', 'food', 'route', 'plan']
+  stepKeys.forEach(k => {
+    steps.value[k] = 'waiting'
+  })
+  error.value = ''
+  result.value = null
+  
+  const formattedForm = {
+    ...form.value,
+    travel_date: form.value.travel_date ? formatDate(new Date(form.value.travel_date)) : '',
+    device_id: getDeviceId(),
+  }
+  
+  try {
+    const response = await fetch('/api/v1/travel/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(formattedForm),
+    })
+    
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取响应')
+    
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let currentEvent = ''
+    
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
       
-      // 提交表单
-      await planTravel(formattedForm)
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
       
-      // 监听结果，完成后滚动到结果区域
-      if (result.value) {
-        await nextTick()
-        if (resultContainer.value) {
-          resultContainer.value.scrollIntoView({ behavior: 'smooth' })
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7).trim()
+          continue
+        }
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6))
+            
+            if (currentEvent === 'agent_start') {
+              const agent = data.agent as StepKey
+              if (agent in steps.value) {
+                steps.value[agent] = 'running'
+              }
+            } else if (currentEvent === 'agent_end') {
+              const agent = data.agent as StepKey
+              if (agent in steps.value) {
+                steps.value[agent] = 'done'
+              }
+            } else if (currentEvent === 'plan') {
+              steps.value.plan = 'done'
+              result.value = {
+                result_markdown: data.markdown,
+                coordinates: data.coordinates,
+              }
+            } else if (currentEvent === 'error') {
+              steps.value.plan = 'error'
+              error.value = data.message
+            }
+          } catch (e) {
+            // 忽略解析错误
+          }
         }
       }
     }
-  })
+  } catch (e) {
+    error.value = '请求失败，请重试'
+  }
+  
+  // 滚动到结果区域
+  if (result.value) {
+    await nextTick()
+    if (resultContainer.value) {
+      resultContainer.value.scrollIntoView({ behavior: 'smooth' })
+    }
+  }
 }
 
 const resetForm = () => {
   if (formRef.value) {
-    formRef.value.resetFields()
+    ;(formRef.value as any).resetFields()
   }
-  reset()
+  result.value = null
+  error.value = ''
+  hasStarted.value = false
+  const stepKeys: StepKey[] = ['weather', 'activities', 'food', 'route', 'plan']
+  stepKeys.forEach(k => {
+    steps.value[k] = 'waiting'
+  })
 }
 
 const mockTravelPlan = async () => {
-  // 生成mock markdown文案
   const mockMarkdown = `# Mock 行程建议
 
 ## 天气与出行提醒
@@ -318,12 +384,8 @@ const mockTravelPlan = async () => {
 
 ✅ **行程紧凑但不过满**，全天以观光+美食为主线，适合两人轻松出游。`
   
-  // 构建mock响应（包含坐标数据）
   const mockResponse = {
-    session_id: `session-${Date.now()}`,
-    status: 'completed',
     result_markdown: mockMarkdown,
-    created_at: new Date().toISOString(),
     coordinates: {
       points: [
         {
@@ -381,23 +443,22 @@ const mockTravelPlan = async () => {
     }
   }
   
-  // 重置之前的响应
-  travelStore.reset()
+  // 模拟进度
+  const agents: StepKey[] = ['weather', 'activities', 'food', 'route', 'plan']
+  for (const agent of agents) {
+    steps.value[agent] = 'running'
+    await new Promise(resolve => setTimeout(resolve, 300))
+    steps.value[agent] = 'done'
+  }
   
-  // 设置到store中
-  travelStore.setResponse(mockResponse)
+  result.value = mockResponse
   
-  // 检查result是否更新
-  console.log('PlannerView result after mock:', result.value)
-  
-  // 滚动到结果区域
   await nextTick()
   if (resultContainer.value) {
     resultContainer.value.scrollIntoView({ behavior: 'smooth' })
   }
 }
 </script>
-
 <style lang="scss">
 .planner-view {
   h2 {
@@ -417,18 +478,47 @@ const mockTravelPlan = async () => {
     margin-left: -40px;
   }
 
-  .loading-container {
-    display: flex;
-    justify-content: center;
-    padding: $spacing-xl;
-  }
-
-  .status-container {
-    background-color: white;
-    padding: $spacing-lg;
-    border-radius: $border-radius;
-    box-shadow: $box-shadow-light;
-    margin-bottom: $spacing-lg;
+  .plan-progress {
+    background: white;
+    padding: 24px;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    margin-bottom: 16px;
+    
+    .progress-title {
+      font-size: 16px;
+      font-weight: 500;
+      color: #303133;
+      margin-bottom: 16px;
+    }
+    
+    .progress-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 0;
+      font-size: 15px;
+      color: #909399;
+      
+      &.running {
+        color: #409eff;
+        font-weight: 500;
+      }
+      
+      &.done {
+        color: #67c23a;
+      }
+      
+      &.error {
+        color: #f56c6c;
+      }
+      
+      .step-icon {
+        font-size: 18px;
+        width: 24px;
+        text-align: center;
+      }
+    }
   }
 
   .result-container {
@@ -442,12 +532,11 @@ const mockTravelPlan = async () => {
       margin-bottom: $spacing-md;
       color: #303133;
     }
-  }
-
-  .slider-value {
-    margin-left: $spacing-md;
-    font-size: $font-size-sm;
-    color: #606266;
+    
+    .result-actions {
+      margin-top: $spacing-lg;
+      text-align: center;
+    }
   }
 }
 
@@ -457,7 +546,7 @@ const mockTravelPlan = async () => {
       padding: $spacing-md;
     }
 
-    .status-container,
+    .plan-progress,
     .result-container {
       padding: $spacing-md;
     }
